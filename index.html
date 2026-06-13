@@ -1043,68 +1043,51 @@ function el2(){
 }
 
 // ── GAS HELPERS ───────────────────────────────────────
-// GASはCORSの制約があるためGETで送信する
-// URLの上限（約7000文字）を超えないよう自動圧縮
-const GAS_URL_LIMIT = 6000;
+const MAX_URL = 5500; // GASのURL上限より余裕を持った値
 
 async function postGas(data) {
-  const compressed = compressForGas(data);
-  const payload = JSON.stringify(compressed);
+  // データを段階的に圧縮してURLに収める
+  const send = buildSendData(data);
   const params = new URLSearchParams();
-  params.append('payload', payload);
+  params.append('payload', JSON.stringify(send));
   const url = `${gasUrl}?${params.toString()}`;
 
-  // URLが長すぎる場合はさらに圧縮
-  if (url.length > GAS_URL_LIMIT) {
-    const minimal = compressMinimal(data);
-    const minParams = new URLSearchParams();
-    minParams.append('payload', JSON.stringify(minimal));
-    const r = await fetch(`${gasUrl}?${minParams.toString()}`, {
-      method: 'GET', redirect: 'follow',
-    });
-    return r.json();
+  if(url.length > MAX_URL) {
+    // さらに圧縮
+    const mini = buildSendData(data, true);
+    const p2 = new URLSearchParams();
+    p2.append('payload', JSON.stringify(mini));
+    const r2 = await fetch(`${gasUrl}?${p2.toString()}`, {method:'GET',redirect:'follow'});
+    return r2.json();
   }
 
-  const r = await fetch(url, { method: 'GET', redirect: 'follow' });
+  const r = await fetch(url, {method:'GET', redirect:'follow'});
   return r.json();
 }
 
-// 通常圧縮：utterancesを直近15件に絞る
-function compressForGas(data) {
-  const d = { ...data };
-  if (d.utterances && d.utterances.length > 15) {
-    d.utterances = d.utterances.slice(-15);
-  }
-  // transcriptは先頭1000文字に絞る
-  if (d.transcript && d.transcript.length > 1000) {
-    d.transcript = d.transcript.substring(0, 1000) + '...（省略）';
-  }
-  return d;
-}
+function buildSendData(data, minimal=false) {
+  const d = {...data};
+  const limit = minimal ? 3 : 8;
+  const txtLimit = minimal ? 300 : 600;
 
-// 最小圧縮：会議締め時など大きなデータ向け
-function compressMinimal(data) {
-  const d = { ...data };
-  // utterancesは直近5件のみ
-  if (d.utterances) {
-    d.utterances = d.utterances.slice(-5);
-  }
-  // approvedViewsは最初の2件のみ
-  if (d.approvedViews && d.approvedViews.length > 2) {
-    d.approvedViews = d.approvedViews.slice(0, 2);
-  }
-  // transcript省略
-  if (d.transcript) {
-    d.transcript = d.transcript.substring(0, 500) + '...';
-  }
-  // doubts・checkpointsは最初の3件のみ
-  if (d.doubts && d.doubts.length > 3) d.doubts = d.doubts.slice(0, 3);
-  if (d.checkpoints && d.checkpoints.length > 3) d.checkpoints = d.checkpoints.slice(0, 3);
+  // utterances: 直近n件のみ
+  if(d.utterances) d.utterances = d.utterances.slice(-limit);
+  // 配列を件数制限
+  ['direction','positioning','decisions','actions','undecided'].forEach(k=>{
+    if(d[k]) d[k] = d[k].slice(0, limit);
+  });
+  ['doubts','checkpoints','approvedViews'].forEach(k=>{
+    if(d[k]) d[k] = d[k].slice(0, minimal?2:5);
+  });
+  // 文字列を長さ制限
+  ['transcript','closing_message','synapse_final_view','context'].forEach(k=>{
+    if(d[k] && d[k].length > txtLimit) d[k] = d[k].substring(0, txtLimit);
+  });
   return d;
 }
 
 async function getGas(query) {
-  const r = await fetch(`${gasUrl}?${query}`, { method: 'GET', redirect: 'follow' });
+  const r = await fetch(`${gasUrl}?${query}`, {method:'GET', redirect:'follow'});
   return r.json();
 }
 
