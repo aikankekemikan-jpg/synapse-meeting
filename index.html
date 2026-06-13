@@ -1,727 +1,937 @@
-// ================================================================
-// SYNAPSE GAS v2.1 — APIキー隠蔽 + Drive連携 + アクセス制御
-// ================================================================
-//
-// 【初回セットアップ手順】
-//
-// 1. Googleスプレッドシートを新規作成（知識ベース用）
-//
-// 2. 拡張機能 → Apps Script → このコードを貼り付けて保存
-//
-// 3. スクリプトプロパティに以下を設定
-//    Apps Script → プロジェクトの設定 → スクリプトプロパティ
-//    ┌─────────────────────┬──────────────────────────────┐
-//    │ GEMINI_API_KEY      │ AIzaSy〇〇〇（Gemini APIキー）│
-//    ├─────────────────────┼──────────────────────────────┤
-//    │ ACCESS_CONFIG       │ 下記のJSON形式で設定           │
-//    └─────────────────────┴──────────────────────────────┘
-//
-// 4. ACCESS_CONFIG の設定例（JSONをそのまま貼り付け）：
-//    {
-//      "codes": {
-//        "HANABI2024": ["1ABCdef_フォルダID_〇〇レジデンス"],
-//        "SAKURA2024": ["1XYZabc_フォルダID_△△マンション"],
-//        "GL_SUZUKI":  ["1ABCdef_フォルダID_〇〇レジデンス",
-//                       "1XYZabc_フォルダID_△△マンション"],
-//        "ADMIN_ALL":  "ALL"
-//      }
-//    }
-//    ※ コードに対応するDriveフォルダIDのリストを設定
-//    ※ "ALL" を設定すると全フォルダにアクセス可能（管理者用）
-//    ※ Google Workspace導入後はメールアドレス認証に自動切替
-//
-// 5. Google Driveにフォルダ構成を作成
-//    SYNAPSE_物件資料/（ルートフォルダ）
-//    ├── 〇〇レジデンス/
-//    │   ├── 競合比較表.pdf
-//    │   └── 広告計画書.pdf
-//    └── △△マンション/
-//        └── 議事録バックログ.docx
-//
-// 6. ルートフォルダIDを下の DRIVE_ROOT_FOLDER_ID に設定
-//
-// 7. デプロイ → 新しいデプロイ → 種類：ウェブアプリ
-//    ・次のユーザーとして実行：自分
-//    ・アクセスできるユーザー：全員
-//
-// 8. デプロイURLを現場に配布する
-//
-// ================================================================
-// 【Google Workspace導入後の切り替え】
-// USE_WORKSPACE_AUTH を true に変更するだけ。
-// フロントのHTMLは変更不要。
-// ================================================================
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>SYNAPSE</title>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Noto+Sans+JP:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg:#f5f2eb;--bg2:#ede9df;--bg3:#e4dfd3;--panel:#fff;
+  --ink:#1a1814;--ink2:#3a3630;--ink3:#6a6458;--ink4:#9a9488;
+  --rule:rgba(26,24,20,.10);--rule2:rgba(26,24,20,.06);
+  --red:#8b2020;--red-l:rgba(139,32,32,.08);
+  --teal:#1a5a4a;--teal-l:rgba(26,90,74,.08);--teal2:#2a8a74;
+  --amber:#8a5a10;--amber-l:rgba(138,90,16,.08);
+  --navy:#1c2e4a;--navy-l:rgba(28,46,74,.08);
+  --rec:#c0392b;
+  --r:4px;
+}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--ink2);font-family:'Noto Sans JP',sans-serif;font-weight:300;height:100dvh;display:flex;flex-direction:column}
 
-// ▼ ルートフォルダIDをここに入力
-const DRIVE_ROOT_FOLDER_ID = "ここにフォルダIDを入れてください";
+/* SCREENS */
+.screen{display:none;flex:1;flex-direction:column;overflow:hidden}
+.screen.on{display:flex}
 
-// ▼ Google Workspace導入後に true に変更
-const USE_WORKSPACE_AUTH = false;
+/* ── GAS / SETUP 共通フォーム ── */
+.form-screen{align-items:center;justify-content:center;padding:24px 20px;overflow-y:auto}
+.form-card{max-width:480px;width:100%;background:var(--panel);border:1px solid var(--rule);border-radius:8px;overflow:hidden}
+.fc-top{padding:24px 26px 18px;border-bottom:1px solid var(--rule)}
+.fc-mark{font-family:'Libre Baskerville',serif;font-size:10px;letter-spacing:.28em;text-transform:uppercase;color:var(--ink4);margin-bottom:10px}
+.fc-title{font-family:'Libre Baskerville',serif;font-size:22px;color:var(--ink);margin-bottom:5px}
+.fc-desc{font-size:12px;color:var(--ink3);line-height:1.8}
+.fc-body{padding:18px 26px 22px;display:flex;flex-direction:column;gap:11px}
+.f-lbl{font-size:11px;color:var(--ink3);margin-bottom:3px}
+.f-in{width:100%;background:var(--bg);border:1px solid var(--rule);color:var(--ink);padding:10px 12px;font-size:13px;font-family:'Noto Sans JP',sans-serif;font-weight:300;border-radius:var(--r);outline:none;transition:border-color .2s}
+.f-in:focus{border-color:var(--ink2)}
+.f-in::placeholder{color:var(--ink4)}
+.f-ta{resize:vertical;min-height:68px}
+.f-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.f-hint{font-size:10px;color:var(--ink4);line-height:1.6;margin-top:-4px}
+.f-sec{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink4);font-family:'DM Mono',monospace;padding-bottom:5px;border-bottom:1px solid var(--rule);margin-top:4px}
+.f-err{font-size:11px;color:var(--red);background:var(--red-l);padding:8px 10px;border-radius:var(--r);display:none}
+.f-err.on{display:block}
+.f-btn{width:100%;background:var(--ink);color:var(--bg);border:none;padding:13px;font-size:13px;font-weight:500;cursor:pointer;border-radius:var(--r);font-family:inherit;transition:opacity .2s;margin-top:2px}
+.f-btn:hover{opacity:.85}
+.f-btn:disabled{opacity:.4;cursor:not-allowed}
+.f-link{font-size:11px;color:var(--ink4);text-align:right;cursor:pointer;text-decoration:underline}
 
-const SHEET_INDEX = "INDEX";
-const MAX_FILE_CHARS = 8000;
+/* FOLDER LIST */
+.folder-wrap{display:flex;flex-direction:column;gap:5px}
+.folder-btn{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--bg);border:1px solid var(--rule);border-radius:var(--r);cursor:pointer;transition:all .15s;text-align:left;width:100%;font-family:inherit}
+.folder-btn:hover,.folder-btn.sel{border-color:var(--teal);background:var(--teal-l)}
+.folder-ico{font-size:17px;flex-shrink:0}
+.folder-nm{font-size:13px;color:var(--ink);font-weight:400;flex:1}
+.folder-ct{font-size:10px;color:var(--ink4);font-family:'DM Mono',monospace}
+.folder-loading{font-size:12px;color:var(--ink3);padding:10px;text-align:center}
 
-// ================================================================
-// POST ハンドラ
-// ================================================================
-function doPost(e) {
-  try {
-    // POSTデータが空の場合（プリフライトの場合）
-    if (!e.postData || !e.postData.contents) {
-      return jsonRes({ success: true });
+/* ── DIAGNOSIS ── */
+#diagScreen{padding:22px 18px;align-items:center;overflow-y:auto}
+.diag-wrap{max-width:640px;width:100%}
+.diag-hd{margin-bottom:16px}
+.diag-title{font-family:'Libre Baskerville',serif;font-size:20px;color:var(--ink);margin-bottom:4px}
+.diag-sub{font-size:12px;color:var(--ink3);line-height:1.7}
+.diag-info{font-size:11px;color:var(--teal);background:var(--teal-l);border:1px solid rgba(26,90,74,.15);padding:7px 11px;border-radius:var(--r);margin-bottom:12px}
+.diag-loading{text-align:center;padding:40px 20px}
+.d-spin{width:34px;height:34px;border:2px solid var(--rule);border-top-color:var(--teal);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.d-spin-txt{font-size:12px;color:var(--ink3);line-height:1.8}
+.diag-result{display:none;flex-direction:column;gap:10px}
+.diag-result.on{display:flex}
+.d-sec{background:var(--panel);border:1px solid var(--rule);border-radius:var(--r);overflow:hidden}
+.d-sec-hd{padding:9px 13px;display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--rule)}
+.d-sec-ico{font-size:14px}
+.d-sec-title{font-size:12px;font-weight:500;color:var(--ink);letter-spacing:.03em;flex:1}
+.d-sec-cnt{font-size:10px;color:var(--ink4);font-family:'DM Mono',monospace}
+.d-sec-body{padding:9px 13px;display:flex;flex-direction:column;gap:6px}
+.d-item{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.7;padding:6px 8px;border-radius:var(--r)}
+.d-agree{background:var(--teal-l)} .d-doubt{background:var(--amber-l)}
+.d-view{background:var(--navy-l);flex-direction:column}
+.d-view-row{display:flex;gap:8px;align-items:flex-start}
+.d-check{background:var(--red-l)}
+.d-ico{font-size:12px;flex-shrink:0;margin-top:1px} .d-txt{color:var(--ink2)}
+.v-edit{width:100%;background:var(--bg);border:1px solid var(--rule);color:var(--ink);padding:6px 8px;font-size:11px;font-family:'Noto Sans JP',sans-serif;font-weight:300;border-radius:var(--r);outline:none;resize:vertical;min-height:52px;margin-top:3px}
+.v-edit:focus{border-color:var(--navy)}
+.diag-actions{display:flex;gap:8px;margin-top:4px}
+.da-ok{flex:1;background:var(--teal);color:var(--panel);border:none;padding:12px;font-size:13px;font-weight:500;cursor:pointer;border-radius:var(--r);font-family:inherit}
+.da-ok:hover{opacity:.9}
+.da-retry{background:none;color:var(--ink3);border:1px solid var(--rule);padding:12px 14px;font-size:12px;cursor:pointer;border-radius:var(--r);font-family:inherit}
+
+/* ── MEETING ── */
+#meetScreen{flex-direction:column}
+
+/* Header */
+.m-head{background:var(--ink);color:var(--bg);padding:0 16px;height:50px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.mh-left{display:flex;align-items:center;gap:10px}
+.mh-logo{font-family:'Libre Baskerville',serif;font-size:15px;letter-spacing:.1em;color:var(--bg)}
+.mh-prop{font-size:11px;color:rgba(245,242,235,.4);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mh-right{display:flex;align-items:center;gap:8px}
+.mh-timer{font-size:11px;color:rgba(245,242,235,.5);font-family:'DM Mono',monospace;background:rgba(255,255,255,.08);padding:3px 8px;border-radius:20px}
+
+/* Voice toggle */
+.voice-toggle{display:flex;align-items:center;gap:5px;padding:5px 11px;border-radius:20px;cursor:pointer;border:none;font-family:inherit;font-size:11px;transition:all .2s}
+.vt-on{background:rgba(26,90,74,.3);color:#7dd4a8;border:1px solid rgba(26,90,74,.4)}
+.vt-off{background:rgba(255,255,255,.08);color:rgba(245,242,235,.5);border:1px solid rgba(255,255,255,.15)}
+.vt-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.vt-on .vt-dot{background:#7dd4a8;animation:blink 1.5s ease-in-out infinite}
+.vt-off .vt-dot{background:rgba(255,255,255,.3)}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+.end-btn{font-size:11px;color:rgba(245,242,235,.5);background:none;border:1px solid rgba(255,255,255,.15);padding:4px 10px;border-radius:20px;cursor:pointer;font-family:inherit}
+.end-btn:hover{color:var(--bg);border-color:rgba(245,242,235,.5)}
+
+/* Body */
+.m-body{display:flex;flex:1;overflow:hidden}
+
+/* Feed */
+.feed-col{flex:1;display:flex;flex-direction:column;border-right:1px solid var(--rule);overflow:hidden}
+.feed-hd{padding:8px 13px;border-bottom:1px solid var(--rule);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;background:var(--bg2)}
+.fh-lbl{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink4);font-family:'DM Mono',monospace}
+
+/* Recording button */
+.rec-area{padding:10px 13px;border-top:1px solid var(--rule);background:var(--bg);flex-shrink:0;display:flex;flex-direction:column;gap:8px}
+.rec-row{display:flex;align-items:center;gap:10px}
+.rec-btn{width:52px;height:52px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;transition:all .2s;position:relative}
+.rec-btn-off{background:var(--bg3);border:2px solid var(--rule)}
+.rec-btn-on{background:var(--rec);border:2px solid #e74c3c;box-shadow:0 0 0 4px rgba(192,57,43,.2)}
+.rec-btn-on::after{content:'';position:absolute;inset:-6px;border-radius:50%;border:2px solid rgba(192,57,43,.3);animation:recPulse 1.5s ease-in-out infinite}
+@keyframes recPulse{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.12);opacity:.15}}
+.rec-status{flex:1}
+.rec-status-txt{font-size:13px;color:var(--ink2);margin-bottom:2px}
+.rec-interim{font-size:11px;color:var(--ink4);min-height:18px;line-height:1.5;font-style:italic}
+.rec-speaker-sel{display:flex;gap:5px;flex-wrap:wrap}
+.sp-btn{font-size:11px;padding:3px 10px;border:1px solid var(--rule);background:var(--panel);color:var(--ink3);cursor:pointer;border-radius:20px;font-family:inherit;transition:all .15s}
+.sp-btn.active{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+
+/* Feed messages */
+.feed{flex:1;overflow-y:auto;padding:8px 11px;display:flex;flex-direction:column;gap:2px}
+.feed::-webkit-scrollbar{width:3px}
+.feed::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:2px}
+.utt{padding:7px 11px;border-radius:var(--r);animation:fi .25s ease forwards;opacity:0}
+@keyframes fi{to{opacity:1}}
+.u-h{background:var(--panel);border:1px solid var(--rule2)}
+.u-op{background:var(--teal-l);border:1px solid rgba(26,90,74,.15);border-left:3px solid var(--teal)}
+.u-q{background:var(--amber-l);border:1px solid rgba(138,90,16,.15);border-left:3px solid var(--amber)}
+.u-al{background:var(--red-l);border:1px solid rgba(139,32,32,.15);border-left:3px solid var(--red)}
+.u-cl{background:var(--navy-l);border:1px solid rgba(28,46,74,.15);border-left:3px solid var(--navy)}
+.u-sys{background:none;border:none;padding:3px 11px;text-align:center}
+.uh{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+.us{font-size:10px;font-weight:500;letter-spacing:.04em}
+.s-h{color:var(--ink2)}.s-op{color:var(--teal)}.s-q{color:var(--amber)}.s-al{color:var(--red)}.s-cl{color:var(--navy)}
+.ub{font-size:8px;padding:1px 5px;border-radius:20px;font-family:'DM Mono',monospace;letter-spacing:.04em}
+.b-op{background:rgba(26,90,74,.1);color:var(--teal)}
+.b-q{background:rgba(138,90,16,.1);color:var(--amber)}
+.b-al{background:rgba(139,32,32,.1);color:var(--red)}
+.b-cl{background:rgba(28,46,74,.1);color:var(--navy)}
+.ut{font-size:9px;color:var(--ink4);font-family:'DM Mono',monospace;margin-left:auto}
+.utxt{font-size:12.5px;line-height:1.75;color:var(--ink2)}
+.u-sys .utxt{font-size:11px;color:var(--ink4)}
+.thinking{display:flex;gap:4px;padding:7px 11px;background:var(--teal-l);border:1px solid rgba(26,90,74,.12);border-left:3px solid var(--teal);border-radius:var(--r);align-items:center}
+.td{width:5px;height:5px;border-radius:50%;background:var(--teal);opacity:.4;animation:tp 1.2s ease-in-out infinite}
+.td:nth-child(2){animation-delay:.2s}.td:nth-child(3){animation-delay:.4s}
+@keyframes tp{0%,100%{opacity:.2;transform:scale(.8)}50%{opacity:.8;transform:scale(1)}}
+.tl-lbl{font-size:10px;color:var(--teal);font-family:'DM Mono',monospace;margin-left:4px}
+
+/* Speaking indicator */
+.speaking-bar{height:3px;background:var(--rule);flex-shrink:0;overflow:hidden}
+.speaking-fill{height:100%;background:linear-gradient(to right,var(--teal),var(--teal2));width:0%;transition:width .3s;animation:none}
+.speaking-fill.active{animation:speakPulse .6s ease-in-out infinite alternate}
+@keyframes speakPulse{from{opacity:.5}to{opacity:1}}
+
+/* Right panel */
+.kc{width:240px;flex-shrink:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bg2)}
+.kc-hd{padding:8px 12px;border-bottom:1px solid var(--rule);flex-shrink:0}
+.kc-lbl{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink4);font-family:'DM Mono',monospace;margin-bottom:1px}
+.kc-prop{font-size:11px;color:var(--ink3)}
+.kc-body{flex:1;overflow-y:auto;padding:8px 11px;display:flex;flex-direction:column;gap:8px}
+.kc-body::-webkit-scrollbar{width:3px}
+.kc-body::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:2px}
+.kn-s{} .kn-sl{font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink4);font-family:'DM Mono',monospace;margin-bottom:4px;padding-bottom:3px;border-bottom:1px solid var(--rule)}
+.kn-i{font-size:11px;color:var(--ink3);line-height:1.6;padding:3px 0;border-bottom:1px solid var(--rule2);display:flex;gap:5px}
+.kn-i:last-child{border-bottom:none}
+.kn-b{color:var(--ink4);flex-shrink:0;font-size:10px;margin-top:2px}
+.kn-e{font-size:11px;color:var(--ink4);font-style:italic;padding:2px 0}
+.sp-stat{display:flex;flex-direction:column;gap:2px;padding:3px 0;border-bottom:1px solid var(--rule2)}
+.sp-stat:last-child{border-bottom:none}
+.sp-stat-row{display:flex;justify-content:space-between;align-items:center}
+.sp-nm{font-size:11px;color:var(--ink2)}
+.sp-ct{font-size:9px;color:var(--ink4);font-family:'DM Mono',monospace}
+.sp-silent-tag{font-size:9px;color:var(--red);font-family:'DM Mono',monospace}
+.sp-bar-wrap{height:3px;background:var(--bg3);border-radius:2px;overflow:hidden}
+.sp-bar{height:100%;border-radius:2px;transition:width .4s ease}
+
+/* Closing */
+.co{background:var(--panel);border:1px solid rgba(28,46,74,.2);border-left:3px solid var(--navy);border-radius:var(--r);overflow:hidden;margin-top:2px}
+.co-h{background:var(--navy-l);padding:8px 12px;border-bottom:1px solid rgba(28,46,74,.1);font-size:11px;font-weight:500;color:var(--navy)}
+.co-body{padding:8px 12px;display:flex;flex-direction:column;gap:6px}
+.co-st{font-size:10px;font-weight:500;color:var(--ink2);margin-bottom:2px}
+.co-i{display:flex;gap:6px;align-items:flex-start;font-size:12px;color:var(--ink2);line-height:1.6;padding:3px 0;border-bottom:1px solid var(--rule2)}
+.co-i:last-child{border-bottom:none}
+.co-n{font-family:'DM Mono',monospace;font-size:9px;color:var(--ink4);flex-shrink:0;margin-top:2px}
+.co-tgs{display:flex;gap:4px;flex-wrap:wrap;margin-top:2px}
+.co-tg{font-size:9px;padding:1px 6px;border-radius:20px;font-family:'DM Mono',monospace}
+.t-w{background:rgba(26,90,74,.1);color:var(--teal)}
+.t-d{background:rgba(138,90,16,.1);color:var(--amber)}
+.t-o{background:rgba(139,32,32,.08);color:var(--red)}
+
+@media(max-width:640px){.kc{display:none}}
+</style>
+</head>
+<body>
+
+<!-- GAS設定 -->
+<div class="screen on form-screen" id="gasScreen">
+  <div class="form-card">
+    <div class="fc-top">
+      <div class="fc-mark">SYNAPSE</div>
+      <div class="fc-title">接続設定</div>
+      <div class="fc-desc">管理者から共有されたURLとアクセスコードを入力してください。</div>
+    </div>
+    <div class="fc-body">
+      <div>
+        <div class="f-lbl">GAS URL</div>
+        <input type="text" class="f-in" id="gasUrlIn" placeholder="https://script.google.com/macros/s/〇〇/exec">
+      </div>
+      <div>
+        <div class="f-lbl">アクセスコード</div>
+        <input type="text" class="f-in" id="codeIn" placeholder="例：HANABI2024" autocomplete="off" style="text-transform:uppercase;letter-spacing:.08em">
+      </div>
+      <div class="f-hint">入力内容はこのデバイスに記憶されます。</div>
+      <div class="f-err" id="gasErr"></div>
+      <button class="f-btn" id="gasBtn" onclick="connectGas()">接続して始める →</button>
+    </div>
+  </div>
+</div>
+
+<!-- 会議設定 -->
+<div class="screen form-screen" id="setupScreen">
+  <div class="form-card">
+    <div class="fc-top">
+      <div class="fc-mark">SYNAPSE — 会議設定</div>
+      <div class="fc-title">会議の準備</div>
+      <div class="fc-desc">物件フォルダを選んで会議を設定してください。</div>
+    </div>
+    <div class="fc-body">
+      <div class="f-sec">物件フォルダ（Google Drive）</div>
+      <div id="folderArea"><div class="folder-loading">📁 読み込んでいます...</div></div>
+
+      <div class="f-sec">会議情報</div>
+      <div>
+        <div class="f-lbl">物件名</div>
+        <input type="text" class="f-in" id="propName" placeholder="例：〇〇レジデンス">
+      </div>
+      <div class="f-row">
+        <div>
+          <div class="f-lbl">会議の種類</div>
+          <input type="text" class="f-in" id="meetType" placeholder="例：月次販売会議">
+        </div>
+        <div>
+          <div class="f-lbl">参加者（スペース区切り）</div>
+          <input type="text" class="f-in" id="members" placeholder="例：田中 鈴木 佐藤 GL">
+        </div>
+      </div>
+      <div>
+        <div class="f-lbl">今日のアジェンダ（任意）</div>
+        <input type="text" class="f-in" id="agenda" placeholder="例：来月の集客戦略の決定">
+      </div>
+      <div>
+        <div class="f-lbl">補足情報（任意）</div>
+        <textarea class="f-in f-ta" id="propContext" rows="2" placeholder="例：残28戸・競合Aが値引き中"></textarea>
+      </div>
+      <div class="f-link" onclick="showScreen('gasScreen')">← 接続設定に戻る</div>
+      <button class="f-btn" id="setupBtn" onclick="startDiagnosis()">資料を読み込み、SYNAPSEの見解を生成する →</button>
+    </div>
+  </div>
+</div>
+
+<!-- 診断 -->
+<div class="screen form-screen" id="diagScreen">
+  <div class="diag-wrap">
+    <div class="diag-hd">
+      <div class="diag-title">SYNAPSEによる独自診断</div>
+      <div class="diag-sub">資料を分析し見解を生成しています。承認前に修正できます。</div>
+    </div>
+    <div class="diag-info" id="diagInfo"></div>
+    <div class="diag-loading" id="diagLoading">
+      <div class="d-spin"></div>
+      <div class="d-spin-txt" id="diagTxt">Google Driveから資料を読み込んでいます...</div>
+    </div>
+    <div class="diag-result" id="diagResult">
+      <div class="d-sec">
+        <div class="d-sec-hd"><div class="d-sec-ico">✅</div><div class="d-sec-title">同意できる点</div><div class="d-sec-cnt" id="agCnt"></div></div>
+        <div class="d-sec-body" id="agList"></div>
+      </div>
+      <div class="d-sec">
+        <div class="d-sec-hd"><div class="d-sec-ico">⚠️</div><div class="d-sec-title">疑問・懸念点</div><div class="d-sec-cnt" id="dtCnt"></div></div>
+        <div class="d-sec-body" id="dtList"></div>
+      </div>
+      <div class="d-sec">
+        <div class="d-sec-hd"><div class="d-sec-ico">🧭</div><div class="d-sec-title">SYNAPSEの独自見解（編集可）</div><div class="d-sec-cnt">承認前に修正できます</div></div>
+        <div class="d-sec-body" id="vwList"></div>
+      </div>
+      <div class="d-sec">
+        <div class="d-sec-hd"><div class="d-sec-ico">❓</div><div class="d-sec-title">会議で必ず確認すべき論点</div><div class="d-sec-cnt" id="ckCnt"></div></div>
+        <div class="d-sec-body" id="ckList"></div>
+      </div>
+      <div class="diag-actions">
+        <button class="da-ok" onclick="approveDiag()">この見解で会議を開始する →</button>
+        <button class="da-retry" onclick="startDiagnosis()">再診断する</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 会議 -->
+<div class="screen" id="meetScreen">
+  <div class="m-head">
+    <div class="mh-left">
+      <div class="mh-logo">SYNAPSE</div>
+      <div class="mh-prop" id="mhProp"></div>
+    </div>
+    <div class="mh-right">
+      <div class="mh-timer" id="meetTimer">00:00</div>
+      <button class="voice-toggle vt-off" id="voiceToggle" onclick="toggleVoice()">
+        <div class="vt-dot"></div>
+        <span id="vtLabel">音声OFF</span>
+      </button>
+      <button class="end-btn" onclick="endMeeting()">締める</button>
+    </div>
+  </div>
+
+  <!-- 発言中インジケーター -->
+  <div class="speaking-bar"><div class="speaking-fill" id="speakingFill"></div></div>
+
+  <div class="m-body">
+    <!-- Feed -->
+    <div class="feed-col">
+      <div class="feed-hd">
+        <div class="fh-lbl">発言ログ</div>
+      </div>
+      <div class="feed" id="feed"></div>
+
+      <!-- 録音エリア -->
+      <div class="rec-area">
+        <div class="rec-speaker-sel" id="spSel"></div>
+        <div class="rec-row">
+          <button class="rec-btn rec-btn-off" id="recBtn" onclick="toggleRecording()">🎙</button>
+          <div class="rec-status">
+            <div class="rec-status-txt" id="recStatusTxt">タップして録音開始</div>
+            <div class="rec-interim" id="recInterim"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right panel -->
+    <div class="kc">
+      <div class="kc-hd">
+        <div class="kc-lbl">リアルタイムパネル</div>
+        <div class="kc-prop" id="kcProp"></div>
+      </div>
+      <div class="kc-body">
+        <div class="kn-s"><div class="kn-sl">発言状況</div><div id="kn-sp"><div class="kn-e">会議開始後に表示</div></div></div>
+        <div class="kn-s"><div class="kn-sl">SYNAPSEの見解</div><div id="kn-v"><div class="kn-e">診断結果を反映中...</div></div></div>
+        <div class="kn-s"><div class="kn-sl">方向性</div><div id="kn-d"><div class="kn-e">蓄積中...</div></div></div>
+        <div class="kn-s"><div class="kn-sl">ポジショニング確認</div><div id="kn-p"><div class="kn-e">会議内容から確認します</div></div></div>
+        <div class="kn-s"><div class="kn-sl">決定事項</div><div id="kn-dec"><div class="kn-e">まだなし</div></div></div>
+        <div class="kn-s"><div class="kn-sl">未解決の論点</div><div id="kn-i"><div class="kn-e">なし</div></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── STATE ─────────────────────────────────────────────
+let gasUrl='', accessCode='';
+let config={};
+let selectedFolderId='', selectedFolderName='';
+let diagData=null, approvedViews=[];
+let utterances=[], aiMemory={direction:[],positioning:[],decisions:[],issues:[]};
+let turnsSinceAI=0, totalTurns=0;
+let meetStart=null, timerIv=null, processing=false, ended=false;
+let activeSpeaker='';
+
+// 音声
+let recognition=null, isRecording=false, voiceOn=true;
+let synth=window.speechSynthesis;
+let isSpeaking=false;
+let wakeLock=null;
+
+// ── INIT ──────────────────────────────────────────────
+window.addEventListener('load', ()=>{
+  const g=localStorage.getItem('synapse_gas_v2');
+  const c=localStorage.getItem('synapse_code');
+  if(g) document.getElementById('gasUrlIn').value=g;
+  if(c){ document.getElementById('codeIn').value=c; }
+  if(g&&c){ gasUrl=g; accessCode=c.toUpperCase(); connectGas(true); }
+  initSpeechRecognition();
+});
+
+// ── SPEECH RECOGNITION ────────────────────────────────
+function initSpeechRecognition(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ console.warn('SpeechRecognition not supported'); return; }
+  recognition = new SR();
+  recognition.lang = 'ja-JP';
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
+
+  recognition.onresult = (e)=>{
+    let interim='', final='';
+    for(let i=e.resultIndex; i<e.results.length; i++){
+      if(e.results[i].isFinal) final += e.results[i][0].transcript;
+      else interim += e.results[i][0].transcript;
     }
-    const data = JSON.parse(e.postData.contents);
-    switch (data.action) {
-      case "verify_code":   return verifyCode(data);
-      case "diagnose":      return diagnose(data);
-      case "chat":          return chat(data);
-      case "close_meeting": return closeMeeting(data);
-      default:
-        return jsonRes({ success: false, error: "Unknown action: " + data.action });
+    document.getElementById('recInterim').textContent = interim;
+    if(final.trim()) onFinalSpeech(final.trim());
+  };
+
+  recognition.onend = ()=>{
+    // 録音中なら自動再開（iOSは途切れやすいため）
+    if(isRecording && !isSpeaking){
+      try{ recognition.start(); }catch(e){}
     }
-  } catch (err) {
-    return jsonRes({ success: false, error: err.toString() });
-  }
+  };
+
+  recognition.onerror = (e)=>{
+    if(e.error==='no-speech') return;
+    console.warn('Recognition error:', e.error);
+    if(isRecording && !isSpeaking){
+      setTimeout(()=>{ try{ recognition.start(); }catch(ex){} }, 500);
+    }
+  };
 }
 
-// ================================================================
-// GET ハンドラ
-// ================================================================
-function doGet(e) {
-  try {
-    // payloadパラメータがある場合はPOSTと同様に処理する
-    if (e.parameter.payload) {
-      const data = JSON.parse(e.parameter.payload);
-      switch (data.action) {
-        case "verify_code":   return verifyCode(data);
-        case "diagnose":      return diagnose(data);
-        case "chat":          return chat(data);
-        case "close_meeting": return closeMeeting(data);
-        default:
-          return jsonRes({ success: false, error: "Unknown action: " + data.action });
-      }
-    }
-
-    const action   = e.parameter.action;
-    const code     = e.parameter.code || "";
-    const property = e.parameter.property || "";
-
-    switch (action) {
-      case "list_folders":    return listFolders(code, e);
-      case "get_knowledge":   return getKnowledge(property);
-      case "list_properties": return listProperties();
-      case "health":          return jsonRes({ success: true, message: "SYNAPSE GAS v2.1 is running" });
-      default:
-        return jsonRes({ success: false, error: "Unknown action" });
-    }
-  } catch (err) {
-    return jsonRes({ success: false, error: err.toString() });
+async function toggleRecording(){
+  if(!recognition){
+    alert('このブラウザは音声認識に対応していません。\nSafari（iOS）またはChrome（Android）をお使いください。');
+    return;
   }
-}
-
-// ================================================================
-// アクセスコードの検証
-// ================================================================
-function verifyCode(data) {
-  const code  = (data.code || "").trim().toUpperCase();
-  const email = data.email || "";
-
-  if (USE_WORKSPACE_AUTH) {
-    // Google Workspace 認証モード
-    const userEmail = Session.getActiveUser().getEmail();
-    if (!userEmail) return jsonRes({ success: false, error: "Googleアカウントでのログインが必要です" });
-    const folders = getFoldersByEmail(userEmail);
-    return jsonRes({ success: true, mode: "workspace", email: userEmail, folderCount: folders.length });
-  }
-
-  // コード認証モード
-  if (!code) return jsonRes({ success: false, error: "アクセスコードを入力してください" });
-  const config = getAccessConfig();
-  if (!config) return jsonRes({ success: false, error: "アクセス設定が見つかりません。管理者に連絡してください" });
-
-  const allowed = config.codes[code];
-  if (!allowed) return jsonRes({ success: false, error: "アクセスコードが正しくありません" });
-
-  return jsonRes({ success: true, mode: "code", code, isAdmin: allowed === "ALL" });
-}
-
-// ================================================================
-// フォルダ一覧（アクセス制御付き）
-// ================================================================
-function listFolders(code, e) {
-  let allowedFolderIds = null; // null = 全て許可（ADMINのみ）
-
-  if (USE_WORKSPACE_AUTH) {
-    const userEmail = Session.getActiveUser().getEmail();
-    if (!userEmail) return jsonRes({ success: false, error: "認証エラー" });
-    allowedFolderIds = getFoldersByEmail(userEmail);
-    if (allowedFolderIds !== "ALL" && allowedFolderIds.length === 0) {
-      return jsonRes({ success: false, error: "アクセスできる物件がありません" });
-    }
+  if(!isRecording){
+    startRecording();
   } else {
-    const upperCode = code.trim().toUpperCase();
-    const config = getAccessConfig();
-    if (!config || !config.codes[upperCode]) {
-      return jsonRes({ success: false, error: "無効なアクセスコードです" });
-    }
-    allowedFolderIds = config.codes[upperCode];
-  }
-
-  try {
-    const root = DriveApp.getFolderById(DRIVE_ROOT_FOLDER_ID);
-    const iter = root.getFolders();
-    const result = [];
-
-    while (iter.hasNext()) {
-      const f = iter.next();
-      const fid = f.getId();
-
-      // アクセス制御チェック
-      if (allowedFolderIds !== "ALL" && !allowedFolderIds.includes(fid)) continue;
-
-      result.push({
-        id:        fid,
-        name:      f.getName(),
-        fileCount: countFiles(f),
-      });
-    }
-
-    return jsonRes({ success: true, folders: result });
-  } catch (err) {
-    return jsonRes({ success: false, error: "フォルダ取得エラー: " + err.toString() });
+    stopRecording();
   }
 }
 
-// ================================================================
-// アクセス設定を取得
-// ================================================================
-function getAccessConfig() {
-  const raw = PropertiesService.getScriptProperties().getProperty("ACCESS_CONFIG");
-  if (!raw) return null;
-  try { return JSON.parse(raw); }
-  catch (e) { return null; }
+function startRecording(){
+  isRecording=true;
+  try{ recognition.start(); }catch(e){}
+  document.getElementById('recBtn').className='rec-btn rec-btn-on';
+  document.getElementById('recBtn').textContent='⏹';
+  document.getElementById('recStatusTxt').textContent='録音中 — 話してください';
+  // Wake Lockで画面をオンに保つ
+  requestWakeLock();
 }
 
-// ================================================================
-// Workspace認証: メールアドレスから許可フォルダを取得
-// ================================================================
-function getFoldersByEmail(email) {
-  const config = getAccessConfig();
-  if (!config || !config.emails) return [];
-  const allowed = config.emails[email.toLowerCase()];
-  return allowed || [];
+function stopRecording(){
+  isRecording=false;
+  try{ recognition.stop(); }catch(e){}
+  document.getElementById('recBtn').className='rec-btn rec-btn-off';
+  document.getElementById('recBtn').textContent='🎙';
+  document.getElementById('recStatusTxt').textContent='タップして録音開始';
+  document.getElementById('recInterim').textContent='';
+  releaseWakeLock();
 }
 
-// ================================================================
-// 管理者用: アクセス設定を更新するヘルパー関数
-// （Apps Scriptのコンソールから手動実行）
-// ================================================================
-function updateAccessConfig() {
-  // ★ ここに設定を書いて手動実行してください ★
-  const config = {
-    codes: {
-      // "コード（大文字）": ["フォルダID1", "フォルダID2"]
-      // "HANABI2024": ["1ABCdef..."],
-      // "GL_SUZUKI":  ["1ABCdef...", "1XYZabc..."],
-      // "ADMIN_ALL":  "ALL",
-    },
-    emails: {
-      // Google Workspace導入後に使用
-      // "tl-yamada@anabuki.co.jp": ["1ABCdef..."],
-      // "gl-suzuki@anabuki.co.jp": ["1ABCdef...", "1XYZabc..."],
-      // "takeuchi@anabuki.co.jp":  "ALL",
+async function onFinalSpeech(text){
+  document.getElementById('recInterim').textContent='';
+  if(!text||text.length<2) return;
+
+  // 発言者の特定（「名前：内容」形式に対応）
+  let speaker=activeSpeaker, content=text;
+  const colonMatch=text.match(/^([^\s：:]{1,8})[：:](.+)/);
+  if(colonMatch){
+    const possibleName=colonMatch[1];
+    if(config.members?.includes(possibleName)){
+      speaker=possibleName; content=colonMatch[2].trim();
     }
+  }
+
+  addHuman(speaker, content);
+  utterances.push({speaker, text:content, type:'human'});
+  totalTurns++; turnsSinceAI++;
+  updateSpeakerPanel();
+
+  if(shouldSpeak()) await triggerAI();
+}
+
+// ── WAKE LOCK ─────────────────────────────────────────
+async function requestWakeLock(){
+  if(!('wakeLock' in navigator)) return;
+  try{ wakeLock = await navigator.wakeLock.request('screen'); }
+  catch(e){ console.warn('WakeLock:', e); }
+}
+function releaseWakeLock(){
+  if(wakeLock){ wakeLock.release(); wakeLock=null; }
+}
+document.addEventListener('visibilitychange', async()=>{
+  if(document.visibilityState==='visible' && isRecording){
+    requestWakeLock();
+    try{ recognition.start(); }catch(e){}
+  }
+});
+
+// ── VOICE OUTPUT ──────────────────────────────────────
+function toggleVoice(){
+  voiceOn=!voiceOn;
+  const btn=document.getElementById('voiceToggle');
+  const lbl=document.getElementById('vtLabel');
+  if(voiceOn){
+    btn.className='voice-toggle vt-on';
+    lbl.textContent='音声ON';
+  } else {
+    btn.className='voice-toggle vt-off';
+    lbl.textContent='音声OFF';
+    synth.cancel();
+  }
+}
+
+function speak(text){
+  if(!voiceOn || !text) return;
+
+  // SYNAPSE発言中は録音を一時停止（ハウリング防止）
+  if(isRecording) try{ recognition.stop(); }catch(e){}
+  isSpeaking=true;
+
+  // 発言中インジケーター
+  document.getElementById('speakingFill').classList.add('active');
+  document.getElementById('speakingFill').style.width='100%';
+
+  synth.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'ja-JP';
+  utter.rate = 1.05;
+  utter.pitch = 1.0;
+  utter.volume = 1.0;
+
+  // 日本語の自然な声を選ぶ
+  const voices = synth.getVoices();
+  const jaVoice = voices.find(v=>v.lang==='ja-JP' && v.name.includes('Kyoko'))
+    || voices.find(v=>v.lang==='ja-JP' && !v.name.includes('Otoya'))
+    || voices.find(v=>v.lang==='ja-JP')
+    || voices.find(v=>v.lang.startsWith('ja'));
+  if(jaVoice) utter.voice = jaVoice;
+
+  utter.onend = ()=>{
+    isSpeaking=false;
+    document.getElementById('speakingFill').classList.remove('active');
+    document.getElementById('speakingFill').style.width='0%';
+    // 録音を再開
+    if(isRecording) setTimeout(()=>{ try{ recognition.start(); }catch(e){} }, 300);
   };
-  PropertiesService.getScriptProperties().setProperty("ACCESS_CONFIG", JSON.stringify(config));
-  Logger.log("ACCESS_CONFIG updated: " + JSON.stringify(config));
-}
-
-// ================================================================
-// Drive からフォルダの資料を読み込む
-// ================================================================
-function loadFolderContents(folderId) {
-  const folder = DriveApp.getFolderById(folderId);
-  const files  = folder.getFiles();
-  const contents = [];
-
-  while (files.hasNext()) {
-    const file     = files.next();
-    const mimeType = file.getMimeType();
-    const name     = file.getName();
-
-    try {
-      if (mimeType === "application/pdf") {
-        const base64 = Utilities.base64Encode(file.getBlob().getBytes());
-        contents.push({ type: "pdf", name, data: base64 });
-        continue;
-      }
-
-      let text = "";
-      if (mimeType === "application/vnd.google-apps.document") {
-        text = DocumentApp.openById(file.getId()).getBody().getText();
-      } else if (mimeType === "application/vnd.google-apps.spreadsheet") {
-        const ss = SpreadsheetApp.openById(file.getId());
-        text = ss.getSheets().map(sh => {
-          const d = sh.getDataRange().getValues();
-          return `【${sh.getName()}】\n` + d.map(r => r.join("\t")).join("\n");
-        }).join("\n\n");
-      } else if (["text/plain","text/csv"].includes(mimeType)) {
-        text = file.getBlob().getDataAsString("UTF-8");
-      } else if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-        text = file.getBlob().getDataAsString("UTF-8");
-      } else {
-        continue;
-      }
-
-      if (text.trim()) {
-        contents.push({ type: "text", name, data: text.substring(0, MAX_FILE_CHARS) });
-      }
-    } catch (err) {
-      Logger.log("File read error: " + name + " - " + err.toString());
-    }
-  }
-  return contents;
-}
-
-// ================================================================
-// 診断
-// ================================================================
-function diagnose(data) {
-  const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
-  if (!apiKey) return jsonRes({ success: false, error: "APIキーが設定されていません" });
-
-  // アクセス権チェック
-  const authResult = checkAccess(data.code, data.folderId);
-  if (!authResult.ok) return jsonRes({ success: false, error: authResult.error });
-
-  const property = data.property || "物件名未設定";
-  const pastKnowledge = getPastKnowledge(property);
-
-  let driveContents = [], fileNames = [];
-  if (data.folderId) {
-    try {
-      driveContents = loadFolderContents(data.folderId);
-      fileNames = driveContents.map(c => c.name);
-    } catch (err) {
-      Logger.log("Drive load error: " + err.toString());
-    }
-  }
-
-  const parts = [{ text: buildDiagnosisPrompt(property, data.context, data.agenda, pastKnowledge, fileNames) }];
-  driveContents.filter(c => c.type === "text").forEach(c => {
-    parts.push({ text: `\n\n## 資料「${c.name}」\n${c.data}` });
-  });
-  driveContents.filter(c => c.type === "pdf").forEach(c => {
-    parts.push({ inlineData: { mimeType: "application/pdf", data: c.data } });
-    parts.push({ text: `上記は「${c.name}」のPDFです。` });
-  });
-
-  const response = callGemini(apiKey, [{ parts }], 2000, 0.7);
-  if (!response.success) return jsonRes(response);
-
-  const match = response.text.match(/```json\s*([\s\S]*?)```/);
-  if (!match) return jsonRes({ success: false, error: "診断結果のパースに失敗しました" });
-
-  try {
-    return jsonRes({
-      success: true,
-      diagnosis: JSON.parse(match[1]),
-      loadedFiles: fileNames,
-      hasPastKnowledge: !!pastKnowledge,
-      lastMeeting: pastKnowledge?.lastMeeting || null,
-    });
-  } catch (err) {
-    return jsonRes({ success: false, error: "JSON解析エラー: " + err.toString() });
-  }
-}
-
-function buildDiagnosisPrompt(property, context, agenda, pastKnowledge, fileNames) {
-  return `あなたはマンション販売の戦略コンサルタントAI「SYNAPSE」です。
-
-## 物件・会議情報
-物件名：${property}
-アジェンダ：${agenda || "未設定"}
-補足情報：${context || "なし"}
-読み込んだ資料：${fileNames.length > 0 ? fileNames.join("、") : "なし"}
-
-${pastKnowledge ? `## 過去の会議から蓄積された知識
-方向性：${pastKnowledge.direction?.join("、") || "なし"}
-ポジショニング：${pastKnowledge.positioning?.join("、") || "なし"}
-決定事項（直近5件）：${pastKnowledge.decisions?.slice(-5).join("、") || "なし"}
-未決定のまま持ち越し：${pastKnowledge.undecided?.join("、") || "なし"}` : ""}
-
-## あなたの役割と思考の原則
-1. 資料を読み込み「同意できる点」と「疑問に思う点」を明確に分ける
-2. 人間が気づいていない・言いにくい・後回しにしがちな問題を積極的に見つける
-3. ターゲット設定と価格帯の年収整合性を必ず検証する
-4. 訴求軸が競合と被っていないか確認する
-5. 根拠のない方向性・感覚論を見つけて指摘する
-6. 竣工・販売期限から逆算した時間軸の危機感を常に持つ
-7. 「資料が正しい」という前提で動かない。資料は仮説であり検証が必要
-
-## 出力形式（必ずこのJSONで返してください）
-\`\`\`json
-{
-  "agrees": [{"text": "同意できる内容（根拠付きで具体的に）"}],
-  "doubts": [{"text": "疑問・懸念点（鋭く・遠慮なく）"}],
-  "views": [{"text": "SYNAPSEの独自見解（人間が気づいていない視点で）"}],
-  "checkpoints": [{"text": "会議で必ず確認すべき論点"}],
-  "briefing": "会議開始時の自己紹介（2〜3文）"
-}
-\`\`\``;
-}
-
-// ================================================================
-// 会議中発言生成
-// ================================================================
-function chat(data) {
-  const apiKey = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
-  if (!apiKey) return jsonRes({ success: false, error: "APIキーが設定されていません" });
-
-  const prompt = buildChatPrompt(data);
-  const response = callGemini(apiKey, [{ parts: [{ text: prompt }] }], 1200, 0.75);
-  if (!response.success) return jsonRes(response);
-
-  const match = response.text.match(/```json\s*([\s\S]*?)```/);
-  if (!match) {
-    const cleaned = response.text.replace(/```[\s\S]*?```/g, "").trim();
-    return jsonRes({ success: true, type: "response", speak: true, message: cleaned, badge: "opinion" });
-  }
-  try {
-    return jsonRes({ success: true, ...JSON.parse(match[1]) });
-  } catch (e) {
-    return jsonRes({ success: false, error: "パースエラー" });
-  }
-}
-
-function buildChatPrompt(data) {
-  const views  = (data.approvedViews || []).map((v,i) => `見解${i+1}：${v}`).join("\n");
-  const doubts = (data.doubts || []).map(d => d.text).join("\n");
-  const checks = (data.checkpoints || []).map(c => c.text).join("\n");
-  const transcript = (data.utterances || [])
-    .filter(u => ["human","opinion","question","alert"].includes(u.type))
-    .map(u => `[${u.speaker}]: ${u.text}`)
-    .join("\n");
-
-  const closeSection = data.forceClose ? `
-## 締め宣言
-\`\`\`json
-{
-  "type":"closing",
-  "decisions":[{"item":"決定事項","owner":"担当","deadline":"期限"}],
-  "actions":[{"item":"アクション","owner":"担当","deadline":"期限"}],
-  "undecided":["未決定の論点"],
-  "direction":["方向性キーワード"],
-  "positioning":["ポジショニング確認"],
-  "synapse_final_view":"最終所見（会議の内容・意思決定の質・全員が参加できていたか含む）",
-  "closing_message":"締めの一言"
-}
-\`\`\`` : `
-## 応答形式
-\`\`\`json
-{
-  "type":"response",
-  "speak":true,
-  "message":"発言内容",
-  "badge":"opinion または question または alert",
-  "memory_update":{
-    "direction":["方向性"],
-    "positioning":["ポジショニング"],
-    "decisions":["決定事項"],
-    "issues":["未解決論点"]
-  }
-}
-\`\`\``;
-
-  // 発言者ごとの発言回数を集計
-  const speakerCounts = {};
-  (data.utterances || []).filter(u => u.type === "human").forEach(u => {
-    speakerCounts[u.speaker] = (speakerCounts[u.speaker] || 0) + 1;
-  });
-  const allMembers = data.members || [];
-  const silentMembers = allMembers.filter(m => !speakerCounts[m]);
-  const dominantSpeaker = Object.entries(speakerCounts).sort((a,b) => b[1]-a[1])[0];
-  const lastSpeaker = (data.utterances || []).filter(u => u.type === "human").slice(-1)[0]?.speaker || "";
-
-  return `あなたはマンション販売会議の参加者AI「SYNAPSE」です。
-
-## 物件情報
-物件名：${data.property || "未設定"} / 会議：${data.meetType || "会議"}
-補足：${data.context || "なし"}
-参加者全員：${allMembers.join("、") || "未設定"}
-
-## 事前見解
-${views || "なし"}
-
-## 疑問・懸念
-${doubts || "なし"}
-
-## 確認すべき論点
-${checks || "なし"}
-
-## 発言状況
-まだ一度も発言していないメンバー：${silentMembers.length > 0 ? silentMembers.join("、") : "なし"}
-最も多く発言しているメンバー：${dominantSpeaker ? dominantSpeaker[0] + "（" + dominantSpeaker[1] + "回）" : "なし"}
-直前の発言者：${lastSpeaker || "なし"}
-
-## あなたの2つの役割
-
-### 役割① 批判的思考を持つ戦略参加者
-- 人間が言いにくいことを代わりに言う
-- 根拠のない発言・感覚論での決定に介入する
-- ターゲット×価格×訴求×競合の整合性を常にチェック
-- 「なぜ」「根拠は」「競合と被っていないか」を恐れずに言う
-
-### 役割② 全員参加を促すMC
-- まだ発言していないメンバーがいれば積極的に名指しで振る
-  例：「〇〇さんはどう感じますか？」「〇〇さんの視点を聞かせてください」
-- 一人のメンバーが話しすぎている時は他のメンバーに振る
-- 若手や発言が少ないメンバーの意見を意図的に引き出す
-  例：「〇〇さん、さっき言いかけていた点を聞かせていただけますか？」
-- 全員に問いを投げる場面を作る
-  例：「ここで全員に聞きます。〇〇について一言ずつ意見をもらえますか？」
-- 若手の発言を場に出して価値づける
-  例：「今〇〇さんが言った点は重要です。みなさんどう思いますか？」
-
-### MCとして特に意識すること
-- 沈黙しているメンバーがいる = 何か言えていないことがある と判断する
-- 「参加している全員の意見が聞こえる会議」を設計する
-- 特定の人だけが話す会議を能動的に変える
-- 批判的な指摘をする時も、その後に他のメンバーへ振ることで場を開く
-
-### 発言スタイル
-- 2〜4文で簡潔に
-- 批判的な指摘の後は必ず「〇〇さんはどう思いますか？」で場を開く
-- turnsSinceAI: ${data.turnsSinceAI || 0}（3以上なら必ず発言）
-- 沈黙メンバーがいる場合は優先的に発言を促す
-${closeSection}
-
-## 会話ログ
-${transcript}`;
-}
-
-// ================================================================
-// 会議終了・最終保存
-// ================================================================
-function closeMeeting(data) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const property = data.property || "未設定";
-  const sheetName = sanitize(property);
-  const dateStr = formatDate(new Date());
-
-  let sheet = ss.getSheetByName(sheetName);
-  if (!sheet) { sheet = ss.insertSheet(sheetName); setupPropertySheet(sheet, property); }
-
-  const logName = sheetName + "_LOG";
-  let logSheet = ss.getSheetByName(logName);
-  if (!logSheet) { logSheet = ss.insertSheet(logName); setupLogSheet(logSheet); }
-
-  if (data.direction?.length)   appendSection(sheet, "方向性",        data.direction,   dateStr);
-  if (data.positioning?.length) appendSection(sheet, "ポジショニング",  data.positioning, dateStr);
-
-  const decTexts = (data.decisions || []).map(d =>
-    typeof d === "object" ? `${d.item}（${d.owner || "担当未定"}・${d.deadline || "期限未定"}）` : d
-  );
-  const actTexts = (data.actions || []).map(a =>
-    typeof a === "object" ? `${a.item}（${a.owner || "担当未定"}・${a.deadline || "期限未定"}）` : a
-  );
-
-  if (decTexts.length)          appendSection(sheet, "決定事項",   decTexts, dateStr);
-  if (actTexts.length)          appendSection(sheet, "アクション", actTexts, dateStr);
-  if (data.undecided?.length)   appendSection(sheet, "未決定事項", data.undecided, dateStr);
-  if (data.synapse_final_view)  appendSection(sheet, "SYNAPSEの所見", [data.synapse_final_view], dateStr);
-
-  logSheet.appendRow([
-    dateStr,
-    data.meetType || "会議",
-    (data.members || []).join("、"),
-    (data.decisions || []).length,
-    (data.actions   || []).length,
-    data.closing_message || "",
-    data.synapse_final_view || "",
-    (data.transcript || "").substring(0, 500),
-  ]);
-
-  updateIndex(ss, property, dateStr);
-  return jsonRes({ success: true, message: `「${property}」の知識を保存しました（${dateStr}）` });
-}
-
-// ================================================================
-// 知識取得
-// ================================================================
-function getKnowledge(property) {
-  const knowledge = getPastKnowledge(property);
-  if (!knowledge) return jsonRes({ success: true, exists: false, property });
-  return jsonRes({ success: true, exists: true, property, ...knowledge });
-}
-
-function getPastKnowledge(property) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(sanitize(property));
-  if (!sheet) return null;
-  const knowledge = {
-    direction:    readSection(sheet, "方向性"),
-    positioning:  readSection(sheet, "ポジショニング"),
-    decisions:    readSection(sheet, "決定事項"),
-    actions:      readSection(sheet, "アクション"),
-    undecided:    readSection(sheet, "未決定事項"),
-    synapseViews: readSection(sheet, "SYNAPSEの所見"),
+  utter.onerror = ()=>{
+    isSpeaking=false;
+    document.getElementById('speakingFill').classList.remove('active');
+    document.getElementById('speakingFill').style.width='0%';
+    if(isRecording) setTimeout(()=>{ try{ recognition.start(); }catch(e){} }, 300);
   };
-  const logSheet = ss.getSheetByName(sanitize(property) + "_LOG");
-  if (logSheet && logSheet.getLastRow() > 1) {
-    knowledge.lastMeeting = logSheet.getRange(logSheet.getLastRow(), 1).getValue();
+
+  // iOSのSafariはvoicesが非同期
+  if(synth.getVoices().length===0){
+    synth.addEventListener('voiceschanged', ()=>synth.speak(utter), {once:true});
+  } else {
+    synth.speak(utter);
   }
-  return knowledge;
 }
 
-function listProperties() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const idx = ss.getSheetByName(SHEET_INDEX);
-  if (!idx) return jsonRes({ success: true, properties: [] });
-  const data = idx.getDataRange().getValues();
-  return jsonRes({
-    success: true,
-    properties: data.slice(1).map(r => ({ name: r[0], lastMeeting: r[1], meetingCount: r[2] })).filter(p => p.name)
+// ── GAS CONNECTION ────────────────────────────────────
+async function connectGas(auto=false){
+  const url  = document.getElementById('gasUrlIn').value.trim();
+  const code = document.getElementById('codeIn').value.trim().toUpperCase();
+  if(!url||!code){
+    if(!auto){ showErr('gasErr','URLとアクセスコードを入力してください'); } return;
+  }
+  gasUrl=url; accessCode=code;
+  localStorage.setItem('synapse_gas_v2', url);
+  localStorage.setItem('synapse_code', code);
+  hideErr('gasErr');
+  setBtn('gasBtn', true, '確認中...');
+
+  try{
+    const r = await postGas({action:'verify_code', code});
+    if(!r.success){ showErr('gasErr', r.error||'アクセスコードが正しくありません'); setBtn('gasBtn',false,'接続して始める →'); return; }
+    showScreen('setupScreen');
+    await loadFolders();
+  }catch(e){
+    if(!auto){ showErr('gasErr','接続に失敗しました。URLを確認してください'); }
+    setBtn('gasBtn', false, '接続して始める →');
+  }
+}
+
+async function loadFolders(){
+  const area=document.getElementById('folderArea');
+  area.innerHTML='<div class="folder-loading">📁 フォルダを読み込んでいます...</div>';
+  try{
+    const r=await getGas(`action=list_folders&code=${encodeURIComponent(accessCode)}`);
+    if(!r.success||!r.folders?.length){
+      area.innerHTML='<div class="folder-loading">フォルダが見つかりません。管理者に確認してください。</div>'; return;
+    }
+    area.innerHTML='<div class="folder-wrap">'+r.folders.map(f=>`
+      <button class="folder-btn" id="fb-${f.id}" onclick="selectFolder('${f.id}','${esc(f.name)}')">
+        <div class="folder-ico">📁</div>
+        <div class="folder-nm">${f.name}</div>
+        <div class="folder-ct">${f.fileCount}件</div>
+      </button>`).join('')+'</div>';
+    // 前回の物件を記憶
+    const lastProp=localStorage.getItem('synapse_last_prop');
+    if(lastProp) document.getElementById('propName').value=lastProp;
+  }catch(e){
+    area.innerHTML='<div class="folder-loading">読み込みに失敗しました。</div>';
+  }
+}
+
+function selectFolder(id, name){
+  selectedFolderId=id; selectedFolderName=name;
+  document.querySelectorAll('.folder-btn').forEach(b=>b.classList.remove('sel'));
+  const btn=document.getElementById('fb-'+id);
+  if(btn) btn.classList.add('sel');
+  if(!document.getElementById('propName').value) document.getElementById('propName').value=name;
+}
+
+// ── DIAGNOSIS ─────────────────────────────────────────
+async function startDiagnosis(){
+  const prop=document.getElementById('propName').value.trim();
+  if(!prop){ alert('物件名を入力してください'); return; }
+  config={
+    property:prop,
+    meetType:document.getElementById('meetType').value.trim()||'会議',
+    members:document.getElementById('members').value.trim().split(/\s+/).filter(Boolean),
+    context:document.getElementById('propContext').value.trim(),
+    agenda:document.getElementById('agenda').value.trim(),
+  };
+  if(!config.members.length) config.members=['TL'];
+  localStorage.setItem('synapse_last_prop', prop);
+
+  showScreen('diagScreen');
+  document.getElementById('diagLoading').style.display='block';
+  document.getElementById('diagResult').classList.remove('on');
+  document.getElementById('diagInfo').textContent='';
+
+  const steps=['Google Driveから資料を読み込んでいます...','ターゲット設定を検証しています...','競合ポジショニングを分析しています...','SYNAPSEの見解を生成しています...'];
+  let si=0;
+  const sv=setInterval(()=>{ if(si<steps.length-1){ si++; document.getElementById('diagTxt').textContent=steps[si]; }},1400);
+
+  try{
+    const r=await postGas({action:'diagnose', property:config.property, context:config.context, agenda:config.agenda, folderId:selectedFolderId, code:accessCode});
+    clearInterval(sv);
+    if(!r.success) throw new Error(r.error||'診断に失敗しました');
+    diagData=r.diagnosis;
+    const info=[];
+    if(r.loadedFiles?.length) info.push(`📄 ${r.loadedFiles.join('、')}`);
+    if(r.hasPastKnowledge) info.push(`📚 過去の会議知識を反映（最終：${r.lastMeeting||'不明'}）`);
+    document.getElementById('diagInfo').textContent=info.join('　|　')||'資料の読み込みが完了しました';
+    renderDiag(r.diagnosis);
+  }catch(e){
+    clearInterval(sv);
+    document.getElementById('diagTxt').textContent='エラー：'+e.message;
+  }
+}
+
+function renderDiag(d){
+  document.getElementById('diagLoading').style.display='none';
+  document.getElementById('diagResult').classList.add('on');
+  const rl=(items,id,cls,ico)=>{
+    document.getElementById(id).innerHTML=(items||[]).map(it=>`
+      <div class="d-item ${cls}"><div class="d-ico">${ico}</div><div class="d-txt">${it.text}</div></div>`).join('');
+  };
+  rl(d.agrees,'agList','d-agree','✓');
+  rl(d.doubts,'dtList','d-doubt','?');
+  rl(d.checkpoints,'ckList','d-check','!');
+  document.getElementById('agCnt').textContent=(d.agrees||[]).length+'件';
+  document.getElementById('dtCnt').textContent=(d.doubts||[]).length+'件';
+  document.getElementById('ckCnt').textContent=(d.checkpoints||[]).length+'件';
+  document.getElementById('vwList').innerHTML=(d.views||[]).map((v,i)=>`
+    <div class="d-item d-view">
+      <div class="d-view-row"><div class="d-ico">🧭</div><div class="d-txt">${v.text}</div></div>
+      <textarea class="v-edit" id="ve-${i}">${v.text}</textarea>
+    </div>`).join('');
+}
+
+function approveDiag(){
+  approvedViews=[];
+  (diagData?.views||[]).forEach((_,i)=>{
+    const el=document.getElementById(`ve-${i}`);
+    if(el&&el.value.trim()) approvedViews.push(el.value.trim());
   });
+  startMeeting();
 }
 
-// ================================================================
-// アクセス権チェック（共通）
-// ================================================================
-function checkAccess(code, folderId) {
-  if (USE_WORKSPACE_AUTH) return { ok: true };
-  if (!code) return { ok: false, error: "アクセスコードが必要です" };
-  const config = getAccessConfig();
-  if (!config) return { ok: false, error: "アクセス設定が見つかりません" };
-  const upper = code.trim().toUpperCase();
-  const allowed = config.codes[upper];
-  if (!allowed) return { ok: false, error: "無効なアクセスコードです" };
-  if (allowed === "ALL") return { ok: true };
-  if (folderId && !allowed.includes(folderId)) return { ok: false, error: "このフォルダへのアクセス権がありません" };
-  return { ok: true };
+// ── MEETING ───────────────────────────────────────────
+function startMeeting(){
+  showScreen('meetScreen');
+  document.getElementById('mhProp').textContent=config.property;
+  document.getElementById('kcProp').textContent=config.property;
+
+  // 発言者ボタン
+  const sel=document.getElementById('spSel');
+  config.members.forEach((m,i)=>{
+    const btn=document.createElement('button');
+    btn.className='sp-btn'+(i===0?' active':'');
+    btn.textContent=m;
+    btn.onclick=()=>{ document.querySelectorAll('.sp-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); activeSpeaker=m; };
+    sel.appendChild(btn);
+  });
+  activeSpeaker=config.members[0];
+
+  // タイマー
+  meetStart=Date.now();
+  timerIv=setInterval(()=>{
+    const e=Math.floor((Date.now()-meetStart)/1000);
+    document.getElementById('meetTimer').textContent=`${String(Math.floor(e/60)).padStart(2,'0')}:${String(e%60).padStart(2,'0')}`;
+  },1000);
+
+  // 右パネルに見解を反映
+  if(approvedViews.length){
+    document.getElementById('kn-v').innerHTML=approvedViews.map(v=>`
+      <div class="kn-i"><div class="kn-b">🧭</div><div>${v}</div></div>`).join('');
+  }
+
+  addSys('会議を開始しました。録音ボタンを押してください。');
+  setTimeout(()=>{
+    const brief=diagData?.briefing||`${config.property}の会議に参加します。資料を分析した上で、疑問点や気づきを発言します。`;
+    addAI(brief,'opinion');
+    utterances.push({speaker:'SYNAPSE',text:brief,type:'opinion'});
+    speak(brief);
+  },800);
 }
 
-// ================================================================
-// Gemini API
-// ================================================================
-function callGemini(apiKey, contents, maxTokens, temperature) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-  try {
-    const res = UrlFetchApp.fetch(url, {
-      method: "post",
-      contentType: "application/json",
-      payload: JSON.stringify({ contents, generationConfig: { temperature, maxOutputTokens: maxTokens } }),
-      muteHttpExceptions: true,
+// ── AI TRIGGER ────────────────────────────────────────
+function shouldSpeak(){
+  if(ended||processing) return false;
+  if(turnsSinceAI>=3) return true;
+  if(totalTurns===1) return true;
+  const last=utterances.filter(u=>u.type==='human').slice(-1)[0];
+  if(!last) return false;
+  return ['競合','値引き','ターゲット','訴求','どうする','問題','課題','なぜ','予算','方向','根拠','理由','本当に','そもそも','確認','意見'].some(k=>last.text.includes(k));
+}
+
+async function triggerAI(forceClose=false){
+  processing=true;
+  const th=addThinking();
+  try{
+    const counts={};
+    utterances.filter(u=>u.type==='human').forEach(u=>{ counts[u.speaker]=(counts[u.speaker]||0)+1; });
+
+    const r=await postGas({
+      action:'chat',
+      property:config.property, meetType:config.meetType, context:config.context,
+      members:config.members,
+      approvedViews, doubts:diagData?.doubts||[], checkpoints:diagData?.checkpoints||[],
+      utterances, turnsSinceAI, forceClose, code:accessCode,
     });
-    const code = res.getResponseCode();
-    if (code !== 200) return { success: false, error: `Gemini API エラー (${code})` };
-    const text = JSON.parse(res.getContentText())?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    return { success: true, text };
-  } catch (err) {
-    return { success: false, error: "通信エラー: " + err.toString() };
+    th.remove();
+    if(r.success) handleAIRes(r, forceClose);
+    else addSys('エラー：'+(r.error||'不明'));
+    turnsSinceAI=0;
+  }catch(e){ th.remove(); addSys('通信エラーが発生しました'); }
+  processing=false;
+}
+
+function handleAIRes(d){
+  if(d.type==='closing'){ renderClosing(d); return; }
+  if(d.memory_update){
+    const mu=d.memory_update;
+    if(mu.direction?.length){aiMemory.direction.push(...mu.direction);}
+    if(mu.positioning?.length){aiMemory.positioning.push(...mu.positioning);}
+    if(mu.decisions?.length){aiMemory.decisions.push(...mu.decisions);}
+    if(mu.issues?.length){aiMemory.issues.push(...mu.issues);}
+    updatePanel();
+  }
+  if(d.speak&&d.message){
+    addAI(d.message, d.badge||'opinion');
+    utterances.push({speaker:'SYNAPSE',text:d.message,type:d.badge||'opinion'});
+    speak(d.message);
   }
 }
 
-// ================================================================
-// スプレッドシート操作
-// ================================================================
-function setupPropertySheet(sheet, property) {
-  sheet.getRange("A1").setValue("物件名：" + property)
-    .setFontSize(13).setFontWeight("bold")
-    .setBackground("#1a2b2a").setFontColor("#ffffff");
-  sheet.setColumnWidth(1, 140).setColumnWidth(2, 420).setColumnWidth(3, 160).setColumnWidth(4, 200);
-  sheet.getRange(2,1).setValue("セクション"); sheet.getRange(2,2).setValue("内容");
-  sheet.getRange(2,3).setValue("記録日時"); sheet.getRange(2,4).setValue("MARKER（変更不可）");
-  sheet.getRange(2,1,1,4).setFontWeight("bold").setBackground("#c8e0cc");
-  sheet.setFrozenRows(2);
-  const sections = ["方向性","ポジショニング","決定事項","アクション","未決定事項","SYNAPSEの所見"];
-  let row = 3;
-  sections.forEach(sec => {
-    sheet.getRange(row,1).setValue(`【${sec}】`).setFontWeight("bold").setBackground("#e8f2ec");
-    sheet.getRange(row,4).setValue("SECTION:" + sec);
-    row += 2;
+async function endMeeting(){
+  if(ended) return;
+  ended=true;
+  stopRecording();
+  clearInterval(timerIv);
+  addSys('会議を締めています...');
+  await triggerAI(true);
+}
+
+function renderClosing(d){
+  const decH=(d.decisions||[]).map((dec,i)=>`
+    <div class="co-i"><div class="co-n">D${String(i+1).padStart(2,'0')}</div>
+    <div><div>${dec.item}</div><div class="co-tgs">
+      <span class="co-tg t-w">👤 ${dec.owner||'担当未定'}</span>
+      <span class="co-tg t-d">📅 ${dec.deadline||'期限未定'}</span>
+    </div></div></div>`).join('')||'<div class="co-i"><div class="co-n">—</div><div>決定事項なし</div></div>';
+  const actH=(d.actions||[]).map((a,i)=>`
+    <div class="co-i"><div class="co-n">A${String(i+1).padStart(2,'0')}</div>
+    <div><div>${a.item}</div><div class="co-tgs">
+      <span class="co-tg t-w">👤 ${a.owner||'担当未定'}</span>
+      <span class="co-tg t-d">📅 ${a.deadline||'期限未定'}</span>
+    </div></div></div>`).join('');
+  const undH=(d.undecided||[]).map(u=>`<div class="co-i"><div class="co-n co-tg t-o">?</div><div>${u}</div></div>`).join('');
+  const fvH=d.synapse_final_view?`
+    <div class="co-i" style="background:var(--navy-l);padding:8px;border-radius:var(--r)">
+      <div class="co-n">🧭</div>
+      <div><strong>SYNAPSEの最終所見</strong><br>${d.synapse_final_view}</div>
+    </div>`:'';
+  const f=document.getElementById('feed');
+  const w=document.createElement('div');
+  w.className='utt'; w.style.padding='0';
+  w.innerHTML=`<div class="co"><div class="co-h">📋 会議の成果物 — ${config.meetType}</div>
+    <div class="co-body">
+      <div><div class="co-st">✅ 決定事項</div>${decH}</div>
+      ${actH?`<div><div class="co-st">⚡ 即実行アクション</div>${actH}</div>`:''}
+      ${undH?`<div><div class="co-st">❓ 持ち越し・未決定</div>${undH}</div>`:''}
+      ${fvH}
+    </div></div>`;
+  f.appendChild(w); f.scrollTop=f.scrollHeight;
+
+  if(d.closing_message){
+    setTimeout(()=>{ addAI(d.closing_message,'closing'); speak(d.closing_message); },400);
+  }
+  if(d.direction?.length) aiMemory.direction.push(...d.direction);
+  if(d.positioning?.length) aiMemory.positioning.push(...d.positioning);
+  if(d.decisions?.length) aiMemory.decisions.push(...d.decisions.map(dec=>dec.item));
+  updatePanel();
+  document.querySelector('.end-btn').style.display='none';
+
+  // GASに保存
+  const transcript=utterances.filter(u=>u.type==='human').map(u=>`[${u.speaker}]: ${u.text}`).join('\n');
+  postGas({action:'close_meeting', property:config.property, meetType:config.meetType,
+    members:config.members, direction:[...new Set(aiMemory.direction)],
+    positioning:[...new Set(aiMemory.positioning)],
+    decisions:d.decisions||[], actions:d.actions||[], undecided:d.undecided||[],
+    closing_message:d.closing_message||'', synapse_final_view:d.synapse_final_view||'',
+    transcript
+  }).then(r=>addSys(r.success?'✓ 知識をGoogle Sheetsに保存しました':'保存に失敗しました'))
+    .catch(()=>addSys('保存中にエラーが発生しました'));
+}
+
+// ── PANEL ─────────────────────────────────────────────
+function updatePanel(){
+  const r=(items,id,empty)=>{
+    const el=document.getElementById(id); if(!el) return;
+    el.innerHTML=items.length?items.slice(-5).map(it=>`<div class="kn-i"><div class="kn-b">›</div><div>${it}</div></div>`).join(''):`<div class="kn-e">${empty}</div>`;
+  };
+  r(aiMemory.direction,'kn-d','蓄積中...');
+  r(aiMemory.positioning,'kn-p','会議の内容から確認します');
+  r(aiMemory.decisions,'kn-dec','まだなし');
+  r(aiMemory.issues,'kn-i','なし');
+  updateSpeakerPanel();
+}
+
+function updateSpeakerPanel(){
+  const el=document.getElementById('kn-sp'); if(!el||!config.members) return;
+  const counts={};
+  utterances.filter(u=>u.type==='human').forEach(u=>{ counts[u.speaker]=(counts[u.speaker]||0)+1; });
+  const total=Object.values(counts).reduce((a,b)=>a+b,0)||1;
+  el.innerHTML=config.members.map(m=>{
+    const cnt=counts[m]||0, pct=Math.round(cnt/total*100);
+    const tag=cnt===0?`<span class="sp-silent-tag">未発言</span>`:`<span class="sp-ct">${cnt}回 ${pct}%</span>`;
+    const bc=cnt===0?'rgba(139,32,32,.25)':(pct>=40?'rgba(26,90,74,.5)':'rgba(26,90,74,.25)');
+    return `<div class="sp-stat">
+      <div class="sp-stat-row"><span class="sp-nm">${m}</span>${tag}</div>
+      <div class="sp-bar-wrap"><div class="sp-bar" style="width:${cnt===0?0:Math.max(pct,4)}%;background:${bc}"></div></div>
+    </div>`;
+  }).join('');
+}
+
+// ── RENDER ────────────────────────────────────────────
+function addHuman(sp,text){
+  const f=document.getElementById('feed');
+  const el=document.createElement('div'); el.className='utt u-h';
+  el.innerHTML=`<div class="uh"><span class="us s-h">${sp}</span><span class="ut">${el2()}</span></div><div class="utxt">${text.replace(/\n/g,'<br>')}</div>`;
+  f.appendChild(el); f.scrollTop=f.scrollHeight;
+}
+function addAI(text,badge){
+  const f=document.getElementById('feed');
+  const cls={opinion:'u-op',question:'u-q',alert:'u-al',closing:'u-cl'}[badge]||'u-op';
+  const sc={opinion:'s-op',question:'s-q',alert:'s-al',closing:'s-cl'}[badge]||'s-op';
+  const bc={opinion:'b-op',question:'b-q',alert:'b-al',closing:'b-cl'}[badge]||'b-op';
+  const bl={opinion:'発言',question:'質問',alert:'指摘',closing:'締め'}[badge]||'発言';
+  const el=document.createElement('div'); el.className=`utt ${cls}`;
+  el.innerHTML=`<div class="uh"><span class="us ${sc}">SYNAPSE</span><span class="ub ${bc}">${bl}</span><span class="ut">${el2()}</span></div><div class="utxt">${text.replace(/\n/g,'<br>')}</div>`;
+  f.appendChild(el); f.scrollTop=f.scrollHeight;
+}
+function addSys(text){
+  const f=document.getElementById('feed');
+  const el=document.createElement('div'); el.className='utt u-sys';
+  el.innerHTML=`<div class="utxt">${text}</div>`;
+  f.appendChild(el); f.scrollTop=f.scrollHeight;
+}
+function addThinking(){
+  const f=document.getElementById('feed');
+  const el=document.createElement('div'); el.className='utt'; el.style.padding='0';
+  el.innerHTML=`<div class="thinking"><div class="td"></div><div class="td"></div><div class="td"></div><div class="tl-lbl">SYNAPSE 思考中</div></div>`;
+  f.appendChild(el); f.scrollTop=f.scrollHeight;
+  return el;
+}
+function el2(){
+  if(!meetStart) return '00:00';
+  const e=Math.floor((Date.now()-meetStart)/1000);
+  return `${String(Math.floor(e/60)).padStart(2,'0')}:${String(e%60).padStart(2,'0')}`;
+}
+
+// ── GAS HELPERS ───────────────────────────────────────
+// GASはJSON POSTにCORSヘッダーを返せないため
+// GETパラメータにJSONを乗せる方式で通信する
+async function postGas(data){
+  const params = new URLSearchParams();
+  params.append('payload', JSON.stringify(data));
+  const r = await fetch(`${gasUrl}?${params.toString()}`, {
+    method: 'GET',
+    redirect: 'follow',
   });
+  return r.json();
+}
+async function getGas(query){
+  const r=await fetch(`${gasUrl}?${query}`,{method:'GET',redirect:'follow'});
+  return r.json();
 }
 
-function setupLogSheet(sheet) {
-  const headers = ["日時","会議種別","参加者","決定数","アクション数","サマリー","SYNAPSE最終所見","発言ログ先頭500字"];
-  sheet.appendRow(headers);
-  sheet.getRange(1,1,1,headers.length).setFontWeight("bold").setBackground("#1a2b2a").setFontColor("#ffffff");
-  sheet.setFrozenRows(1);
+// ── UTIL ──────────────────────────────────────────────
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on'));
+  document.getElementById(id).classList.add('on');
 }
-
-function appendSection(sheet, sectionName, items, dateStr) {
-  const data = sheet.getDataRange().getValues();
-  let sectionRow = -1;
-  for (let i = 0; i < data.length; i++) {
-    if (data[i][3] === "SECTION:" + sectionName) { sectionRow = i + 1; break; }
-  }
-  if (sectionRow === -1) return;
-  let insertRow = sectionRow + 1;
-  while (insertRow <= sheet.getLastRow()) {
-    const marker = sheet.getRange(insertRow, 4).getValue();
-    if (marker && marker.toString().startsWith("SECTION:")) break;
-    if (!sheet.getRange(insertRow, 2).getValue()) break;
-    insertRow++;
-  }
-  items.forEach((item, idx) => {
-    sheet.insertRowBefore(insertRow + idx);
-    sheet.getRange(insertRow + idx, 1).setValue(sectionName);
-    sheet.getRange(insertRow + idx, 2).setValue(item);
-    sheet.getRange(insertRow + idx, 3).setValue(dateStr);
-  });
-}
-
-function readSection(sheet, sectionName) {
-  const data = sheet.getDataRange().getValues();
-  let inSection = false;
-  const results = [];
-  for (let i = 0; i < data.length; i++) {
-    if (data[i][3] === "SECTION:" + sectionName) { inSection = true; continue; }
-    if (inSection) {
-      if (data[i][3]?.toString().startsWith("SECTION:")) break;
-      if (data[i][1]) results.push(data[i][1].toString());
-    }
-  }
-  return results;
-}
-
-function updateIndex(ss, property, dateStr) {
-  let idx = ss.getSheetByName(SHEET_INDEX);
-  if (!idx) {
-    idx = ss.insertSheet(SHEET_INDEX, 0);
-    idx.appendRow(["物件名","最終会議日時","会議回数"]);
-    idx.getRange(1,1,1,3).setFontWeight("bold").setBackground("#1a2b2a").setFontColor("#ffffff");
-    idx.setFrozenRows(1);
-  }
-  const data = idx.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === property) {
-      idx.getRange(i+1,2).setValue(dateStr);
-      idx.getRange(i+1,3).setValue((data[i][2]||0)+1);
-      return;
-    }
-  }
-  idx.appendRow([property, dateStr, 1]);
-}
-
-function countFiles(folder) {
-  let count = 0;
-  const files = folder.getFiles();
-  while (files.hasNext()) { files.next(); count++; }
-  return count;
-}
-
-function sanitize(name) { return name.replace(/[\\\/\?\*\[\]:]/g,"_").substring(0,50); }
-function formatDate(d)   { return Utilities.formatDate(d,"Asia/Tokyo","yyyy/MM/dd HH:mm"); }
-function jsonRes(obj) {
-  const output = ContentService.createTextOutput(JSON.stringify(obj));
-  output.setMimeType(ContentService.MimeType.JSON);
-  return output;
-}
-
-// OPTIONSリクエスト（プリフライト）への対応
-function doOptions(e) {
-  return ContentService.createTextOutput("")
-    .setMimeType(ContentService.MimeType.TEXT);
-}
+function showErr(id,msg){ const el=document.getElementById(id); el.textContent=msg; el.classList.add('on'); }
+function hideErr(id){ document.getElementById(id).classList.remove('on'); }
+function setBtn(id,disabled,txt){ const el=document.getElementById(id); el.disabled=disabled; el.textContent=txt; }
+function esc(s){ return s.replace(/'/g,"\\'"); }
+</script>
+</body>
+</html>
