@@ -384,6 +384,8 @@ let utterances=[], aiMemory={direction:[],positioning:[],decisions:[],issues:[]}
 let turnsSinceAI=0, totalTurns=0;
 let meetStart=null, timerIv=null, processing=false, ended=false;
 let activeSpeaker='';
+let saveCounter=0;
+const AUTO_SAVE_INTERVAL=5; // 5発言ごとに保存
 
 // 音声
 let recognition=null, isRecording=false, voiceOn=true;
@@ -533,6 +535,13 @@ async function onFinalSpeech(text){
   updateSpeakerPanel();
 
   if(shouldSpeak()) await triggerAI();
+
+  // 5発言ごとに中間保存
+  saveCounter++;
+  if(saveCounter >= AUTO_SAVE_INTERVAL && gasUrl){
+    saveCounter=0;
+    autoSave();
+  }
 }
 
 // ── WAKE LOCK ─────────────────────────────────────────
@@ -556,13 +565,20 @@ function toggleVoice(){
   voiceOn=!voiceOn;
   const btn=document.getElementById('voiceToggle');
   const lbl=document.getElementById('vtLabel');
+  const dot=btn.querySelector('.vt-dot');
   if(voiceOn){
     btn.className='voice-toggle vt-on';
     lbl.textContent='音声ON';
+    if(dot) dot.style.background='#7dd4a8';
   } else {
     btn.className='voice-toggle vt-off';
     lbl.textContent='音声OFF';
+    if(dot) dot.style.background='rgba(255,255,255,.3)';
     synth.cancel();
+    // 録音中なら再開（SYNAPSEが喋っていないので止まっている可能性）
+    if(isRecording){
+      try{ recognition.start(); }catch(e){}
+    }
   }
 }
 
@@ -827,6 +843,64 @@ function handleAIRes(d){
   }
 }
 
+// 中間自動保存
+async function autoSave(){
+  if(!gasUrl) return;
+  try{
+    const recentUtterances = utterances
+      .filter(u=>u.type==='human')
+      .slice(-20)
+      .map(u=>`[${u.speaker}]: ${u.text}`)
+      .join('\n')
+      .substring(0,600);
+
+    await postGas({
+      action:'close_meeting',
+      property:config.property,
+      meetType:config.meetType+'（中間保存）',
+      members:config.members,
+      direction:[...new Set(aiMemory.direction)].slice(0,5),
+      positioning:[...new Set(aiMemory.positioning)].slice(0,5),
+      decisions:(aiMemory.decisions||[]).slice(0,5),
+      actions:[],
+      undecided:(aiMemory.issues||[]).slice(0,3),
+      closing_message:'',
+      synapse_final_view:'',
+      transcript:recentUtterances,
+    });
+    // 画面に小さく保存済みを表示
+    showAutoSaveToast();
+  }catch(e){
+    console.warn('AutoSave failed:', e);
+  }
+}
+
+function showAutoSaveToast(){
+  // 既存のトーストがあれば削除
+  const old=document.getElementById('autoSaveToast');
+  if(old) old.remove();
+
+  const toast=document.createElement('div');
+  toast.id='autoSaveToast';
+  toast.style.cssText=`
+    position:fixed;bottom:80px;left:50%;transform:translateX(-50%);
+    background:var(--teal);color:white;
+    padding:5px 14px;border-radius:20px;
+    font-size:11px;font-family:'Noto Sans JP',sans-serif;
+    opacity:0;transition:opacity .3s;z-index:999;
+    pointer-events:none;white-space:nowrap;
+  `;
+  toast.textContent='✓ 自動保存しました';
+  document.body.appendChild(toast);
+  requestAnimationFrame(()=>{
+    toast.style.opacity='1';
+    setTimeout(()=>{
+      toast.style.opacity='0';
+      setTimeout(()=>toast.remove(), 300);
+    }, 2000);
+  });
+}
+
 async function endMeeting(){
   if(ended) return;
   ended=true;
@@ -876,16 +950,31 @@ function renderClosing(d){
   updatePanel();
   document.querySelector('.end-btn').style.display='none';
 
-  // GASに保存
-  const transcript=utterances.filter(u=>u.type==='human').map(u=>`[${u.speaker}]: ${u.text}`).join('\n');
-  postGas({action:'close_meeting', property:config.property, meetType:config.meetType,
-    members:config.members, direction:[...new Set(aiMemory.direction)],
-    positioning:[...new Set(aiMemory.positioning)],
-    decisions:d.decisions||[], actions:d.actions||[], undecided:d.undecided||[],
-    closing_message:d.closing_message||'', synapse_final_view:d.synapse_final_view||'',
-    transcript
-  }).then(r=>addSys(r.success?'✓ 知識をGoogle Sheetsに保存しました':'保存に失敗しました'))
-    .catch(()=>addSys('保存中にエラーが発生しました'));
+  // GASに保存（締め時はデータを最小化）
+  const transcript = utterances
+    .filter(u=>u.type==='human')
+    .map(u=>`[${u.speaker}]: ${u.text}`)
+    .join('\n')
+    .substring(0, 800); // 先頭800文字のみ
+
+  const saveData = {
+    action:'close_meeting',
+    property:config.property,
+    meetType:config.meetType,
+    members:config.members,
+    direction:[...new Set(aiMemory.direction)].slice(0,5),
+    positioning:[...new Set(aiMemory.positioning)].slice(0,5),
+    decisions:(d.decisions||[]).slice(0,10),
+    actions:(d.actions||[]).slice(0,10),
+    undecided:(d.undecided||[]).slice(0,5),
+    closing_message:(d.closing_message||'').substring(0,200),
+    synapse_final_view:(d.synapse_final_view||'').substring(0,300),
+    transcript,
+  };
+
+  postGas(saveData)
+    .then(r=>addSys(r.success?'✓ 知識をGoogle Sheetsに保存しました':'保存に失敗しました：'+(r.error||'')))
+    .catch(e=>addSys('保存エラー：'+e.message));
 }
 
 // ── PANEL ─────────────────────────────────────────────
