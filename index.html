@@ -422,17 +422,38 @@ function initSpeechRecognition(){
   };
 
   recognition.onend = ()=>{
-    // 録音中なら自動再開（iOSは途切れやすいため）
     if(isRecording && !isSpeaking){
-      try{ recognition.start(); }catch(e){}
+      try{
+        recognition.start();
+        updateRecStatus('録音中 — 話してください', false);
+      }catch(e){}
     }
   };
 
+  recognition.onstart = ()=>{
+    updateRecStatus('録音中 — 話してください', false);
+  };
+
   recognition.onerror = (e)=>{
-    if(e.error==='no-speech') return;
     console.warn('Recognition error:', e.error);
+    if(e.error === 'not-allowed'){
+      updateRecStatus('マイクの使用が許可されていません', true);
+      isRecording = false;
+      document.getElementById('recBtn').className='rec-btn rec-btn-off';
+      document.getElementById('recBtn').textContent='🎙';
+      return;
+    }
+    if(e.error === 'no-speech') return;
     if(isRecording && !isSpeaking){
-      setTimeout(()=>{ try{ recognition.start(); }catch(ex){} }, 500);
+      updateRecStatus('再接続中...', true);
+      setTimeout(()=>{
+        try{
+          recognition.start();
+          updateRecStatus('録音中 — 話してください', false);
+        }catch(ex){
+          updateRecStatus('録音エラー — タップして再開', true);
+        }
+      }, 800);
     }
   };
 }
@@ -449,22 +470,45 @@ async function toggleRecording(){
   }
 }
 
+function updateRecStatus(msg, isWarn) {
+  const el = document.getElementById('recStatusTxt');
+  if(!el) return;
+  el.textContent = msg;
+  el.style.color = isWarn ? 'var(--red)' : 'var(--ink2)';
+}
+
 function startRecording(){
   isRecording=true;
   try{ recognition.start(); }catch(e){}
   document.getElementById('recBtn').className='rec-btn rec-btn-on';
   document.getElementById('recBtn').textContent='⏹';
-  document.getElementById('recStatusTxt').textContent='録音中 — 話してください';
-  // Wake Lockで画面をオンに保つ
+  updateRecStatus('録音中 — 話してください', false);
   requestWakeLock();
+
+  // 30秒ごとに録音状態を確認する
+  if(window._recCheckInterval) clearInterval(window._recCheckInterval);
+  window._recCheckInterval = setInterval(()=>{
+    if(!isRecording) { clearInterval(window._recCheckInterval); return; }
+    if(isSpeaking) return;
+    // 録音が生きているか確認
+    try{
+      if(recognition && recognition.recognizing === false){
+        recognition.start();
+        updateRecStatus('録音中 — 話してください', false);
+      }
+    }catch(e){
+      // 既に動いている場合はエラーが出るが無視
+    }
+  }, 30000);
 }
 
 function stopRecording(){
   isRecording=false;
+  if(window._recCheckInterval) clearInterval(window._recCheckInterval);
   try{ recognition.stop(); }catch(e){}
   document.getElementById('recBtn').className='rec-btn rec-btn-off';
   document.getElementById('recBtn').textContent='🎙';
-  document.getElementById('recStatusTxt').textContent='タップして録音開始';
+  updateRecStatus('タップして録音開始', false);
   document.getElementById('recInterim').textContent='';
   releaseWakeLock();
 }
@@ -552,14 +596,17 @@ function speak(text){
     isSpeaking=false;
     document.getElementById('speakingFill').classList.remove('active');
     document.getElementById('speakingFill').style.width='0%';
-    // 録音を再開
-    if(isRecording) setTimeout(()=>{ try{ recognition.start(); }catch(e){} }, 300);
+    if(isRecording) setTimeout(()=>{
+      try{ recognition.start(); updateRecStatus('録音中 — 話してください', false); }catch(e){}
+    }, 300);
   };
   utter.onerror = ()=>{
     isSpeaking=false;
     document.getElementById('speakingFill').classList.remove('active');
     document.getElementById('speakingFill').style.width='0%';
-    if(isRecording) setTimeout(()=>{ try{ recognition.start(); }catch(e){} }, 300);
+    if(isRecording) setTimeout(()=>{
+      try{ recognition.start(); updateRecStatus('録音中 — 話してください', false); }catch(e){}
+    }, 300);
   };
 
   // iOSのSafariはvoicesが非同期
@@ -724,7 +771,7 @@ function startMeeting(){
 
   addSys('会議を開始しました。録音ボタンを押してください。');
   setTimeout(()=>{
-    const brief=diagData?.briefing||`${config.property}の会議に参加します。資料を分析した上で、疑問点や気づきを発言します。`;
+    const brief = 'では会議を進めていきましょう！';
     addAI(brief,'opinion');
     utterances.push({speaker:'SYNAPSE',text:brief,type:'opinion'});
     speak(brief);
@@ -907,19 +954,68 @@ function el2(){
 }
 
 // ── GAS HELPERS ───────────────────────────────────────
-// GASはJSON POSTにCORSヘッダーを返せないため
-// GETパラメータにJSONを乗せる方式で通信する
-async function postGas(data){
+// GASはCORSの制約があるためGETで送信する
+// URLの上限（約7000文字）を超えないよう自動圧縮
+const GAS_URL_LIMIT = 6000;
+
+async function postGas(data) {
+  const compressed = compressForGas(data);
+  const payload = JSON.stringify(compressed);
   const params = new URLSearchParams();
-  params.append('payload', JSON.stringify(data));
-  const r = await fetch(`${gasUrl}?${params.toString()}`, {
-    method: 'GET',
-    redirect: 'follow',
-  });
+  params.append('payload', payload);
+  const url = `${gasUrl}?${params.toString()}`;
+
+  // URLが長すぎる場合はさらに圧縮
+  if (url.length > GAS_URL_LIMIT) {
+    const minimal = compressMinimal(data);
+    const minParams = new URLSearchParams();
+    minParams.append('payload', JSON.stringify(minimal));
+    const r = await fetch(`${gasUrl}?${minParams.toString()}`, {
+      method: 'GET', redirect: 'follow',
+    });
+    return r.json();
+  }
+
+  const r = await fetch(url, { method: 'GET', redirect: 'follow' });
   return r.json();
 }
-async function getGas(query){
-  const r=await fetch(`${gasUrl}?${query}`,{method:'GET',redirect:'follow'});
+
+// 通常圧縮：utterancesを直近15件に絞る
+function compressForGas(data) {
+  const d = { ...data };
+  if (d.utterances && d.utterances.length > 15) {
+    d.utterances = d.utterances.slice(-15);
+  }
+  // transcriptは先頭1000文字に絞る
+  if (d.transcript && d.transcript.length > 1000) {
+    d.transcript = d.transcript.substring(0, 1000) + '...（省略）';
+  }
+  return d;
+}
+
+// 最小圧縮：会議締め時など大きなデータ向け
+function compressMinimal(data) {
+  const d = { ...data };
+  // utterancesは直近5件のみ
+  if (d.utterances) {
+    d.utterances = d.utterances.slice(-5);
+  }
+  // approvedViewsは最初の2件のみ
+  if (d.approvedViews && d.approvedViews.length > 2) {
+    d.approvedViews = d.approvedViews.slice(0, 2);
+  }
+  // transcript省略
+  if (d.transcript) {
+    d.transcript = d.transcript.substring(0, 500) + '...';
+  }
+  // doubts・checkpointsは最初の3件のみ
+  if (d.doubts && d.doubts.length > 3) d.doubts = d.doubts.slice(0, 3);
+  if (d.checkpoints && d.checkpoints.length > 3) d.checkpoints = d.checkpoints.slice(0, 3);
+  return d;
+}
+
+async function getGas(query) {
+  const r = await fetch(`${gasUrl}?${query}`, { method: 'GET', redirect: 'follow' });
   return r.json();
 }
 
