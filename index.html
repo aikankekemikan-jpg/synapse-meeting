@@ -111,8 +111,8 @@ body{background:var(--bg);color:var(--ink2);font-family:'Noto Sans JP',sans-seri
 .vt-off .vt-dot{background:rgba(255,255,255,.3)}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
 
-.end-btn{font-size:11px;color:rgba(245,242,235,.5);background:none;border:1px solid rgba(255,255,255,.15);padding:4px 10px;border-radius:20px;cursor:pointer;font-family:inherit}
-.end-btn:hover{color:var(--bg);border-color:rgba(245,242,235,.5)}
+.end-btn{font-size:11px;color:#ff8888;background:rgba(139,32,32,.25);border:1px solid rgba(184,64,64,.5);padding:5px 13px;border-radius:20px;cursor:pointer;font-family:inherit;font-weight:500;transition:all .2s}
+.end-btn:hover{background:rgba(139,32,32,.5);color:white;border-color:rgba(184,64,64,.8)}
 
 /* Body */
 .m-body{display:flex;flex:1;overflow:hidden}
@@ -324,11 +324,11 @@ body{background:var(--bg);color:var(--ink2);font-family:'Noto Sans JP',sans-seri
     </div>
     <div class="mh-right">
       <div class="mh-timer" id="meetTimer">00:00</div>
-      <button class="voice-toggle vt-off" id="voiceToggle" onclick="toggleVoice()">
-        <div class="vt-dot"></div>
-        <span id="vtLabel">音声OFF</span>
+      <button class="voice-toggle vt-on" id="voiceToggle" onclick="toggleVoice()">
+        <div class="vt-dot" style="background:#7dd4a8"></div>
+        <span id="vtLabel">音声ON</span>
       </button>
-      <button class="end-btn" onclick="endMeeting()">締める</button>
+      <button class="end-btn" onclick="confirmEnd()" id="endBtn">会議を終了する</button>
     </div>
   </div>
 
@@ -596,7 +596,7 @@ function speak(text){
   synth.cancel();
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'ja-JP';
-  utter.rate = 1.05;
+  utter.rate = 1.35; // 少し速めに
   utter.pitch = 1.0;
   utter.volume = 1.0;
 
@@ -837,9 +837,13 @@ function handleAIRes(d){
     updatePanel();
   }
   if(d.speak&&d.message){
-    addAI(d.message, d.badge||'opinion');
-    utterances.push({speaker:'SYNAPSE',text:d.message,type:d.badge||'opinion'});
-    speak(d.message);
+    // 発言が長すぎる場合は短縮（200文字以内）
+    const msg = d.message.length > 200
+      ? d.message.substring(0, 200) + '…'
+      : d.message;
+    addAI(msg, d.badge||'opinion');
+    utterances.push({speaker:'SYNAPSE',text:msg,type:d.badge||'opinion'});
+    speak(msg);
   }
 }
 
@@ -899,6 +903,12 @@ function showAutoSaveToast(){
       setTimeout(()=>toast.remove(), 300);
     }, 2000);
   });
+}
+
+function confirmEnd(){
+  if(confirm('会議を終了して成果物を出力しますか？\n\n終了すると録音が止まりSYNAPSEが締めの発言をします。')) {
+    endMeeting();
+  }
 }
 
 async function endMeeting(){
