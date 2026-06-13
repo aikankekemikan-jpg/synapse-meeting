@@ -584,20 +584,33 @@ function triggerAI(forceClose){
   processing=true;
   document.getElementById('recBtn').disabled=true;
   var th=addThinking();
+
+  // utterancesをテキスト化して圧縮（オブジェクト配列より大幅に小さくなる）
+  var logText=utterances.slice(-8).filter(function(u){
+    return ['human','opinion','question','alert'].includes(u.type);
+  }).map(function(u){return '['+u.speaker+']: '+u.text;}).join('\n');
+
+  // 未発言メンバーを計算
   var counts={};
   utterances.filter(function(u){return u.type==='human';}).forEach(function(u){ counts[u.speaker]=(counts[u.speaker]||0)+1; });
-  gas({
+  var silent=cfg.members.filter(function(m){return !counts[m];});
+
+  // 送るデータを最小化（utterancesオブジェクトではなくテキストログで送る）
+  var payload={
     action:'chat',
-    property:cfg.property, meetType:cfg.meetType, context:cfg.context,
+    property:cfg.property,
+    meetType:cfg.meetType,
     members:cfg.members,
-    approvedViews:approvedViews,
-    doubts:diagData?diagData.doubts:[],
-    checkpoints:diagData?diagData.checkpoints:[],
-    utterances:utterances.slice(-10),
-    turnsSinceAI:turnsSinceAI,
-    forceClose:forceClose,
+    silent:silent,
+    views:(approvedViews||[]).slice(0,2).join(' / '),
+    doubts:((diagData&&diagData.doubts)||[]).slice(0,2).map(function(d){return d.text;}).join(' / '),
+    log:logText,
+    turns:turnsSinceAI,
+    close:forceClose?1:0,
     code:accessCode,
-  }).then(function(r){
+  };
+
+  gas(payload).then(function(r){
     th.remove();
     if(r.success) handleAI(r);
     else addSys('エラー：'+(r.error||'不明'));
