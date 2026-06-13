@@ -907,12 +907,19 @@ function el2(){
 }
 
 // ── GAS HELPERS ───────────────────────────────────────
+// GASはJSON POSTにCORSヘッダーを返せないため
+// GETパラメータにJSONを乗せる方式で通信する
 async function postGas(data){
-  const r=await fetch(gasUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+  const params = new URLSearchParams();
+  params.append('payload', JSON.stringify(data));
+  const r = await fetch(`${gasUrl}?${params.toString()}`, {
+    method: 'GET',
+    redirect: 'follow',
+  });
   return r.json();
 }
 async function getGas(query){
-  const r=await fetch(`${gasUrl}?${query}`);
+  const r=await fetch(`${gasUrl}?${query}`,{method:'GET',redirect:'follow'});
   return r.json();
 }
 
