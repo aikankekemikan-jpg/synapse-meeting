@@ -1043,21 +1043,51 @@ function el2(){
 }
 
 // ── GAS HELPERS ───────────────────────────────────────
-const MAX_URL = 5500; // GASのURL上限より余裕を持った値
+// AI処理（diagnose/chat/verify/list）→ GET（CORSなしで通る）
+// 保存処理（close_meeting/auto_save）→ no-cors POST（レスポンス読めないが保存は成功する）
 
 async function postGas(data) {
-  // データを段階的に圧縮してURLに収める
-  const send = buildSendData(data);
+  const action = data.action;
+  const saveActions = ['close_meeting'];
+
+  if(saveActions.includes(action)){
+    // 保存系はno-cors POSTで送る（URLの長さ制限なし）
+    return postNoCors(data);
+  }
+
+  // AI処理系はGETで送る（レスポンスを読む必要があるため）
+  return getWithPayload(data);
+}
+
+// no-cors POST（保存専用・レスポンスは読めないが保存は成功する）
+async function postNoCors(data) {
+  try {
+    await fetch(gasUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: {'Content-Type': 'text/plain'},
+      body: JSON.stringify(data),
+      redirect: 'follow',
+    });
+    // no-corsはレスポンスが読めないので成功とみなす
+    return { success: true, message: '保存しました' };
+  } catch(e) {
+    throw e;
+  }
+}
+
+// GETで送る（AI処理・レスポンスを読む）
+async function getWithPayload(data) {
+  const MAX = 5500;
+  const payload = JSON.stringify(shrink(data));
   const params = new URLSearchParams();
-  params.append('payload', JSON.stringify(send));
+  params.append('payload', payload);
   const url = `${gasUrl}?${params.toString()}`;
 
-  if(url.length > MAX_URL) {
-    // さらに圧縮
-    const mini = buildSendData(data, true);
+  if(url.length > MAX){
     const p2 = new URLSearchParams();
-    p2.append('payload', JSON.stringify(mini));
-    const r2 = await fetch(`${gasUrl}?${p2.toString()}`, {method:'GET',redirect:'follow'});
+    p2.append('payload', JSON.stringify(shrink(data, true)));
+    const r2 = await fetch(`${gasUrl}?${p2.toString()}`, {method:'GET', redirect:'follow'});
     return r2.json();
   }
 
@@ -1065,23 +1095,20 @@ async function postGas(data) {
   return r.json();
 }
 
-function buildSendData(data, minimal=false) {
+// データ圧縮
+function shrink(data, hard=false) {
   const d = {...data};
-  const limit = minimal ? 3 : 8;
-  const txtLimit = minimal ? 300 : 600;
-
-  // utterances: 直近n件のみ
-  if(d.utterances) d.utterances = d.utterances.slice(-limit);
-  // 配列を件数制限
+  const n = hard ? 3 : 10;
+  const c = hard ? 200 : 500;
+  if(d.utterances) d.utterances = d.utterances.slice(-n);
   ['direction','positioning','decisions','actions','undecided'].forEach(k=>{
-    if(d[k]) d[k] = d[k].slice(0, limit);
+    if(d[k]) d[k] = d[k].slice(0, n);
   });
   ['doubts','checkpoints','approvedViews'].forEach(k=>{
-    if(d[k]) d[k] = d[k].slice(0, minimal?2:5);
+    if(d[k]) d[k] = d[k].slice(0, hard?2:5);
   });
-  // 文字列を長さ制限
-  ['transcript','closing_message','synapse_final_view','context'].forEach(k=>{
-    if(d[k] && d[k].length > txtLimit) d[k] = d[k].substring(0, txtLimit);
+  ['transcript','closing_message','synapse_final_view','context','agenda'].forEach(k=>{
+    if(d[k] && d[k].length > c) d[k] = d[k].substring(0, c);
   });
   return d;
 }
