@@ -430,16 +430,36 @@ function speak(text){
   var sf=document.getElementById('speakFill');
   sf.classList.add('active'); sf.style.width='100%';
   window.speechSynthesis.cancel();
-  var u=new SpeechSynthesisUtterance(text);
-  u.lang='ja-JP'; u.rate=1.3; u.pitch=1.0; u.volume=1.0;
+
+  // 長い文を句読点で分割して順番に読み上げる（音切れ対策）
+  var chunks = text.split(/(?<=[。、！？])/).filter(function(c){return c.trim().length>0;});
+  if(chunks.length===0) chunks=[text];
+
   var voices=window.speechSynthesis.getVoices();
   var jv=voices.find(function(v){return v.lang==='ja-JP'&&v.name.includes('Kyoko');})
     ||voices.find(function(v){return v.lang==='ja-JP';});
-  if(jv) u.voice=jv;
-  function onEnd(){ isSpeaking=false; sf.classList.remove('active'); sf.style.width='0%'; if(isRec) setTimeout(function(){ try{recognition.start();setRecTxt('録音中 — 話してください',false);}catch(e){} },300); }
-  u.onend=onEnd; u.onerror=onEnd;
-  if(window.speechSynthesis.getVoices().length===0){ window.speechSynthesis.addEventListener('voiceschanged',function(){ window.speechSynthesis.speak(u); },{once:true}); }
-  else{ window.speechSynthesis.speak(u); }
+
+  var idx=0;
+  function speakNext(){
+    if(idx>=chunks.length){
+      isSpeaking=false;
+      sf.classList.remove('active'); sf.style.width='0%';
+      if(isRec) setTimeout(function(){ try{recognition.start();setRecTxt('録音中 — 話してください',false);}catch(e){} },300);
+      return;
+    }
+    var u=new SpeechSynthesisUtterance(chunks[idx]);
+    u.lang='ja-JP'; u.rate=1.3; u.pitch=1.0; u.volume=1.0;
+    if(jv) u.voice=jv;
+    u.onend=function(){ idx++; speakNext(); };
+    u.onerror=function(){ idx++; speakNext(); };
+    window.speechSynthesis.speak(u);
+  }
+
+  if(window.speechSynthesis.getVoices().length===0){
+    window.speechSynthesis.addEventListener('voiceschanged', speakNext, {once:true});
+  } else {
+    speakNext();
+  }
 }
 
 // ── GAS CONNECTION ────────────────────────────────
